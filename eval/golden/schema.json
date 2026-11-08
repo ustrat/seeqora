@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Seeqora golden question",
+  "type": "object",
+  "required": ["id", "kind", "question", "now", "expected_items"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^q[0-9]{3}$" },
+    "kind": { "enum": ["lookup", "temporal", "multi_source", "negative"] },
+    "question": { "type": "string" },
+    "now": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Reference time for resolving expressions like 'last Tuesday'"
+    },
+    "expected_items": {
+      "type": "array",
+      "description": "Correct source items as {source, item_id}. Empty for negative cases.",
+      "items": {
+        "type": "object",
+        "required": ["source", "item_id"],
+        "properties": {
+          "source": {
+            "enum": ["messages", "photos", "notes", "files", "contacts", "calendar", "email", "call_log", "clipboard", "media"]
+          },
+          "item_id": { "type": "string" }
+        }
+      }
+    },
+    "expected_filters": {
+      "type": "object",
+      "description": "Filters the query rewrite should produce",
+      "properties": {
+        "source": { "type": "string" },
+        "from": { "type": "string", "format": "date-time" },
+        "to": { "type": "string", "format": "date-time" },
+        "sender": { "type": "string" }
+      }
+    },
+    "notes": { "type": "string" }
+  }
+}

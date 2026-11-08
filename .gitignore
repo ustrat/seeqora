@@ -1,0 +1,47 @@
+# Rust
+/target/
+**/target/
+
+# Build doctrine stays local (not published in this repo)
+*.pdf
+*Doctrine*
+*DOCTRINE*
+docs/doctrine/
+
+# Models are versioned downloads, never committed (Model doctrine)
+*.gguf
+*.onnx
+*.mlmodel
+*.mlpackage/
+*.tflite
+models/
+
+# Local databases and traces
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# iOS
+ios/**/xcuserdata/
+ios/**/DerivedData/
+ios/**/*.xcframework/
+*.ipa
+*.dSYM.zip
+
+# Android
+android/**/.gradle/
+android/**/build/
+android/local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
