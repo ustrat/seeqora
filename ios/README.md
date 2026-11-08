@@ -20,4 +20,6 @@ SwiftUI app plus read-only platform adapters. **Owns platform data access and UI
 - **Privacy:** Face ID gate (default on after first index); answer screens blurred in the app switcher.
 - **Generator:** Apple Foundation Models when available, llama.cpp (Metal) otherwise, behind the core `Generator` interface.
 
-*Not started. The Xcode project lands in Phase 0 W1 as an empty shell that links the core.*
+**Build:** `bash scripts/build-ios.sh` on a Mac, then open `ios/Seeqora.xcodeproj`. The project is generated from [`project.yml`](project.yml) with XcodeGen. See [docs/MACINCLOUD.md](../docs/MACINCLOUD.md).
+
+*Phase 0 W1: an empty shell that links the core and shows `coreVersion()`.*

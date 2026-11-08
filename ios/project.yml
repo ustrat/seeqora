@@ -1,0 +1,36 @@
+# XcodeGen spec: the source of truth for the Xcode project.
+# Seeqora.xcodeproj is generated (`xcodegen generate`) and not committed.
+name: Seeqora
+options:
+  bundleIdPrefix: com.ustrat
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Seeqora:
+    type: application
+    platform: iOS
+    sources:
+      - path: Seeqora
+    dependencies:
+      # Built by scripts/build-ios.sh (Rust core as a static XCFramework).
+      - framework: Frameworks/SeeqoraCore.xcframework
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ustrat.seeqora
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Seeqora
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        # Set your Apple Developer team ID on the Mac (Signing & Capabilities),
+        # or pass DEVELOPMENT_TEAM=XXXXXXXXXX to xcodebuild.
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+    scheme: {}
