@@ -130,9 +130,9 @@ fn blob_to_vec(b: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// Turn free text into a safe FTS5 OR-query of quoted terms. The last term is
-/// also a prefix match, so search-as-you-type finds "wifi" while "wif" is typed.
-fn fts_query(q: &str) -> Option<String> {
+/// Turn free text into a safe FTS5 OR-query of quoted terms. With `prefix`,
+/// the last term also matches as a prefix ("wif" finds "wifi").
+fn fts_query(q: &str, prefix: bool) -> Option<String> {
     let words: Vec<String> = q
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
@@ -143,7 +143,7 @@ fn fts_query(q: &str) -> Option<String> {
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            if i == last && t.chars().count() >= 2 {
+            if prefix && i == last && t.chars().count() >= 2 {
                 format!("\"{t}\" OR \"{t}\"*")
             } else {
                 format!("\"{t}\"")
@@ -371,8 +371,29 @@ impl Store {
     }
 
     /// BM25 keyword search. Returns `(chunk_id, score)`, best first; higher is better.
+    ///
+    /// Exact terms rank first. Only if they fill fewer than `k` slots are
+    /// prefix matches on the last word appended, so search-as-you-type finds
+    /// "password" from "pas" without reordering exact matches.
     pub fn keyword_search(&self, query: &str, filters: &Filters, k: usize) -> Result<Vec<(String, f64)>> {
-        let Some(q) = fts_query(query) else {
+        let mut hits = self.keyword_search_with(query, false, filters, k)?;
+        if hits.len() < k {
+            let seen: std::collections::HashSet<String> = hits.iter().map(|h| h.0.clone()).collect();
+            let more = self.keyword_search_with(query, true, filters, k)?;
+            hits.extend(more.into_iter().filter(|h| !seen.contains(&h.0)));
+            hits.truncate(k);
+        }
+        Ok(hits)
+    }
+
+    fn keyword_search_with(
+        &self,
+        query: &str,
+        prefix: bool,
+        filters: &Filters,
+        k: usize,
+    ) -> Result<Vec<(String, f64)>> {
+        let Some(q) = fts_query(query, prefix) else {
             return Ok(vec![]);
         };
         let sql = format!(
