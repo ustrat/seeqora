@@ -113,7 +113,7 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            placeholder = { Text("Ask about your messages, notes, files…") },
+            placeholder = { Text("Search messages, notes, files", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
             trailingIcon = {
                 if (query.isNotEmpty()) {
