@@ -10,7 +10,7 @@ use crate::embed::cosine;
 use crate::error::{CoreError, Result};
 use crate::record::{Record, SourceKind};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -105,6 +105,8 @@ pub struct StoredChunk {
     pub text: String,
     pub uri: String,
     pub timestamp_ms: i64,
+    /// Item metadata (sender, title, filename...) for the citation label.
+    pub metadata: BTreeMap<String, String>,
 }
 
 pub struct Store {
@@ -407,7 +409,7 @@ impl Store {
         Ok(self
             .conn
             .query_row(
-                "SELECT c.chunk_id, c.source, c.item_id, c.text, i.uri, i.timestamp_ms
+                "SELECT c.chunk_id, c.source, c.item_id, c.text, i.uri, i.timestamp_ms, i.metadata
                  FROM chunks c JOIN items i ON i.source = c.source AND i.item_id = c.item_id
                  WHERE c.chunk_id = ?1",
                 params![chunk_id],
@@ -419,11 +421,16 @@ impl Store {
                         r.get::<_, String>(3)?,
                         r.get::<_, String>(4)?,
                         r.get::<_, i64>(5)?,
+                        r.get::<_, String>(6)?,
                     ))
                 },
             )
             .optional()?
-            .and_then(|(chunk_id, src, item_id, text, uri, timestamp_ms)| {
+            .and_then(|(chunk_id, src, item_id, text, uri, timestamp_ms, meta)| {
+                // Metadata is written by upsert_record; unreadable metadata only
+                // costs the label, never the result (T9).
+                let metadata: BTreeMap<String, String> =
+                    serde_json::from_str(&meta).unwrap_or_default();
                 SourceKind::parse(&src).map(|source| StoredChunk {
                     chunk_id,
                     source,
@@ -431,8 +438,18 @@ impl Store {
                     text,
                     uri,
                     timestamp_ms,
+                    metadata,
                 })
             }))
+    }
+
+    /// Indexed items for one source (shown next to its consent toggle).
+    pub fn count_items(&self, source: SourceKind) -> Result<usize> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM items WHERE source = ?1",
+            params![source.as_str()],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
     }
 
     pub fn count_chunks(&self) -> Result<usize> {

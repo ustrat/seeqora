@@ -22,4 +22,11 @@ Jetpack Compose app plus read-only platform adapters. **Owns platform data acces
 
 **Build:** `bash scripts/build-android.sh` (needs the NDK and `ANDROID_NDK_HOME`), then `gradle -p android assembleDebug`. CI uploads a debug APK on every run. A Gradle wrapper will be added once a JDK is available locally.
 
-*Phase 0 W1: an empty shell that links the core and shows `coreVersion()`.*
+**Demo build (Phase 0):** two screens on top of the core `Engine`.
+
+- **Sources:** one switch per source, all off by default, each with one sentence saying what is read. Switching on grants consent and indexes that source. Switching off revokes it and shows how many items were removed. There is also a "Delete everything" button.
+- **Search:** search as you type over switched-on sources. Each result shows its source, who or what it came from, and the date. Tapping a result shows the full passage, its original URI and why it matched. Keyword-only mode is announced on screen until the embedding model lands (W4).
+
+Data comes from the golden-set fixtures in [`../eval/golden/fixtures`](../eval/golden/fixtures), bundled as assets. That is the same synthetic phone the eval measures. Real adapters replace it from W3 on.
+
+**Try it in an emulator:** download the `app-debug` artifact from the latest `ci` run, then run `adb install app-debug.apk`.
