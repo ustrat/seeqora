@@ -1,7 +1,13 @@
 package com.ustrat.seeqora.ui
 
+import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
+import androidx.compose.material3.Button
+import androidx.compose.ui.platform.LocalContext
+import com.ustrat.seeqora.ANSWER_MODEL_NAME
+import com.ustrat.seeqora.ANSWER_MODEL_URL
+import com.ustrat.seeqora.gb
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -62,6 +68,13 @@ fun SourcesScreen(state: AppState, say: (String) -> Unit, version: String) {
         } else {
             say("Seeqora can't read ${state.sourceList.firstOrNull { it.kind == kind }?.name ?: "this"} without Android's permission. You can allow it in Settings > Apps > Seeqora.")
         }
+    }
+    var confirmRemoveModel by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    val modelLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri != null) state.startImport(uri, say)
     }
     val folderLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
@@ -144,6 +157,19 @@ fun SourcesScreen(state: AppState, say: (String) -> Unit, version: String) {
             )
         }
         item {
+            AnswersCard(
+                state,
+                onDownload = {
+                    val open = runCatching {
+                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ANSWER_MODEL_URL)))
+                    }
+                    if (open.isFailure) say("No browser on this phone can open the download link.")
+                },
+                onImport = { modelLauncher.launch(arrayOf("*/*")) },
+                onRemove = { confirmRemoveModel = true },
+            )
+        }
+        item {
             OutlinedCard(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 Row(Modifier.padding(start = 16.dp, end = 12.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -190,6 +216,20 @@ fun SourcesScreen(state: AppState, say: (String) -> Unit, version: String) {
                 }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
+    }
+    if (confirmRemoveModel) {
+        AlertDialog(
+            onDismissRequest = { confirmRemoveModel = false },
+            title = { Text("Remove the answer model?") },
+            text = { Text("This frees ${state.answerModel ?: "the model"} from Seeqora's storage. Search keeps working; you can import a model again later.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRemoveModel = false
+                    scope.launch { say(state.removeAnswerModel()) }
+                }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmRemoveModel = false }) { Text("Cancel") } },
         )
     }
     if (confirmMode) {
@@ -264,6 +304,59 @@ private fun SourceRow(
                 CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
             } else {
                 Switch(checked = granted, onCheckedChange = onToggle)
+            }
+        }
+    }
+}
+
+/** Written answers: the user downloads the model in a browser and imports it; Seeqora stays offline (T1). */
+@Composable
+private fun AnswersCard(state: AppState, onDownload: () -> Unit, onImport: () -> Unit, onRemove: () -> Unit) {
+    OutlinedCard(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Answers", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Written answers with sources, from a language model that runs on this phone. Seeqora itself has no internet access.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            val status = state.importStatus
+            when {
+                !state.answersSupported -> Text(
+                    "This phone has ${gb(state.totalRamBytes)} of memory; answers need about 6 GB. Search works as before.",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                status != null -> Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text(status, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
+                }
+                state.answerModel != null -> {
+                    Text(
+                        "On: ${state.answerModel}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    Row {
+                        TextButton(onClick = onImport) { Text("Replace") }
+                        TextButton(onClick = onRemove) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+                    }
+                }
+                else -> {
+                    Text(
+                        "1. Download $ANSWER_MODEL_NAME in your browser.\n2. Tap Import and pick the .gguf file from Downloads.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 10.dp),
+                    )
+                    Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = onDownload) { Text("Download") }
+                        Button(onClick = onImport) { Text("Import") }
+                    }
+                }
             }
         }
     }

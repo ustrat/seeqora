@@ -13,7 +13,8 @@ import uniffi.seeqora_core.SourceRecord
  * Seeqora, not merely because Android granted the permission (T3).
  */
 object MessagesAdapter {
-    const val MAX_MESSAGES = 10_000
+    /** Newest first. Indexing is cheap; embedding runs ~12 passages/s on a flagship (W4 measurement). */
+    const val MAX_MESSAGES = 50_000
 
     fun read(context: Context, useContactNames: Boolean): List<SourceRecord> {
         val names = ContactNames(context, useContactNames)

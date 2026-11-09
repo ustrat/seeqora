@@ -2,18 +2,24 @@
 //! from their read-only adapters and render what comes back; they never touch
 //! the store or retrieval directly.
 //!
-//! Until the embedding model is chosen (W4), the app ships without one, so
-//! search runs keyword-only and returns the degraded notice for the shell to
-//! show (T9).
+//! Without an embedding model, search runs keyword-only and returns the
+//! degraded notice for the shell to show (T9). Without an answer model, the
+//! shell shows ranked passages only.
 
 use crate::bert::BertEmbedder;
 use crate::embed::Embedder;
 use crate::error::CoreError;
+use crate::generate::{
+    build_prompt, check_citations, says_not_found, Generator, PromptPassage, ANSWER_PASSAGES,
+    MAX_NEW_TOKENS, NOT_FOUND,
+};
+use crate::qwen::QwenGenerator;
 use crate::record::{Record, SourceKind};
 use crate::retrieve::hybrid_search;
 use crate::store::{Filters, Store, UpsertOutcome};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Errors the shell can show as a plain message.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -24,15 +30,52 @@ pub enum SeeqoraError {
     NoConsent(String),
     #[error("{0}")]
     Storage(String),
+    /// The answer model is missing, busy, or failed to run.
+    #[error("{0}")]
+    Model(String),
 }
 
 impl From<CoreError> for SeeqoraError {
     fn from(e: CoreError) -> Self {
         match e {
             CoreError::NoConsent(_) => SeeqoraError::NoConsent(e.to_string()),
+            CoreError::Generation(m) => SeeqoraError::Model(m),
             other => SeeqoraError::Storage(other.to_string()),
         }
     }
+}
+
+/// Receives the answer as it is written. Return `false` to stop.
+#[uniffi::export(callback_interface)]
+pub trait AnswerListener: Send + Sync {
+    fn on_text(&self, text: String) -> bool;
+}
+
+/// Timings for the debug line, so speed can be read off the phone.
+#[derive(Debug, Clone, Default, uniffi::Record)]
+pub struct AnswerStats {
+    pub model_id: String,
+    pub retrieve_ms: u64,
+    pub prompt_tokens: u32,
+    pub generated_tokens: u32,
+    pub prefill_ms: u64,
+    pub decode_ms: u64,
+    pub stopped: bool,
+}
+
+/// A cited answer (T2). Passage `n` in the text is `passages[n - 1]`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct Answer {
+    /// The answer with invalid citations removed.
+    pub text: String,
+    /// False when the model found no answer or cited nothing valid: the shell
+    /// then says so and shows the passages as ranked results (T9).
+    pub found: bool,
+    /// Passage numbers cited, in order of first use.
+    pub cited: Vec<u32>,
+    pub passages: Vec<SearchHit>,
+    pub degraded: Option<String>,
+    pub stats: AnswerStats,
 }
 
 type FfiResult<T> = std::result::Result<T, SeeqoraError>;
@@ -95,6 +138,9 @@ pub struct SearchResults {
 pub struct Engine {
     store: Mutex<Store>,
     embedder: Mutex<Option<Arc<BertEmbedder>>>,
+    /// Held for a whole answer; never held together with `store` (search
+    /// finishes before generation starts), so search stays responsive.
+    generator: Mutex<Option<Box<dyn Generator>>>,
 }
 
 impl Engine {
@@ -102,7 +148,17 @@ impl Engine {
         Arc::new(Self {
             store: Mutex::new(store),
             embedder: Mutex::new(None),
+            generator: Mutex::new(None),
         })
+    }
+
+    fn generator(&self) -> MutexGuard<'_, Option<Box<dyn Generator>>> {
+        self.generator.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    #[cfg(test)]
+    fn set_generator(&self, g: Box<dyn Generator>) {
+        *self.generator() = Some(g);
     }
 
     fn store(&self) -> MutexGuard<'_, Store> {
@@ -256,6 +312,126 @@ impl Engine {
             degraded: r.degraded,
         })
     }
+
+    /// Load the answer model: a Qwen2.5 Instruct GGUF file plus the Qwen2.5
+    /// `tokenizer.json` the shell ships. Returns the model name. Replaces any
+    /// model already loaded.
+    pub fn load_generator(&self, model_path: String, tokenizer_path: String) -> FfiResult<String> {
+        let g = QwenGenerator::load(
+            std::path::Path::new(&model_path),
+            std::path::Path::new(&tokenizer_path),
+        )?;
+        let id = g.model_id().to_string();
+        *self.generator() = Some(Box::new(g));
+        Ok(id)
+    }
+
+    /// Free the answer model's memory (T5). Waits for an answer in progress.
+    pub fn unload_generator(&self) {
+        *self.generator() = None;
+    }
+
+    pub fn generator_loaded(&self) -> bool {
+        self.generator().is_some()
+    }
+
+    /// Answer a question from the user's own data, citing passages (T2).
+    /// Retrieval is the same hybrid search the results list uses (T6).
+    /// `utc_offset_minutes` puts dates in the prompt in local time.
+    pub fn answer(
+        &self,
+        question: String,
+        utc_offset_minutes: i32,
+        listener: Box<dyn AnswerListener>,
+    ) -> FfiResult<Answer> {
+        let t0 = Instant::now();
+        let found = self.search(question.clone(), ANSWER_PASSAGES as u32)?;
+        let mut stats = AnswerStats {
+            retrieve_ms: t0.elapsed().as_millis() as u64,
+            ..Default::default()
+        };
+        let not_found = |passages: Vec<SearchHit>, stats: AnswerStats| Answer {
+            text: NOT_FOUND.to_string(),
+            found: false,
+            cited: vec![],
+            passages,
+            degraded: found.degraded.clone(),
+            stats,
+        };
+        if found.hits.is_empty() {
+            return Ok(not_found(vec![], stats));
+        }
+
+        let mut guard = match self.generator.try_lock() {
+            Ok(g) => g,
+            Err(TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                return Err(SeeqoraError::Model("Already answering a question.".into()))
+            }
+        };
+        let Some(generator) = guard.as_mut() else {
+            return Err(SeeqoraError::Model("No answer model is loaded.".into()));
+        };
+        stats.model_id = generator.model_id().to_string();
+
+        let prompt_passages: Vec<PromptPassage> = found
+            .hits
+            .iter()
+            .map(|h| PromptPassage {
+                label: passage_label(h),
+                timestamp_ms: h.timestamp_ms,
+                text: h.text.clone(),
+            })
+            .collect();
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let (system, user) = build_prompt(&question, &prompt_passages, now_ms, utc_offset_minutes);
+        let mut on_text = |t: &str| listener.on_text(t.to_string());
+        let (raw, g) = generator.generate(&system, &user, MAX_NEW_TOKENS, &mut on_text)?;
+        drop(guard);
+
+        stats.prompt_tokens = g.prompt_tokens as u32;
+        stats.generated_tokens = g.generated_tokens as u32;
+        stats.prefill_ms = g.prefill_ms;
+        stats.decode_ms = g.decode_ms;
+        stats.stopped = g.stopped;
+
+        let (text, cited) = check_citations(&raw, found.hits.len());
+        if cited.is_empty() || says_not_found(&text) {
+            return Ok(not_found(found.hits, stats));
+        }
+        Ok(Answer {
+            text,
+            found: true,
+            cited,
+            passages: found.hits,
+            degraded: found.degraded,
+            stats,
+        })
+    }
+}
+
+/// Who or what a passage came from, as the model sees it.
+fn passage_label(h: &SearchHit) -> String {
+    let get = |k: &str| h.metadata.get(k).map(String::as_str).filter(|s| !s.is_empty());
+    match h.source {
+        SourceKind::Messages => match get("sender") {
+            Some("Me") => match get("to") {
+                Some(to) => format!("Text message you sent to {to}"),
+                None => "Text message you sent".to_string(),
+            },
+            Some(s) => format!("Text message from {s}"),
+            None => "Text message".to_string(),
+        },
+        SourceKind::Contacts => format!("Contact card for {}", get("name").unwrap_or("a contact")),
+        SourceKind::Calendar => format!("Calendar event \"{}\"", get("title").unwrap_or("untitled")),
+        SourceKind::Photos => "Text read from a photo".to_string(),
+        SourceKind::Files => format!("File {}", get("filename").unwrap_or("document")),
+        SourceKind::Notes => format!("Note \"{}\"", get("title").unwrap_or("untitled")),
+        other => other.as_str().to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -307,5 +483,106 @@ mod tests {
 
         assert_eq!(e.revoke(SourceKind::Messages).unwrap().items, 1);
         assert!(e.search("wifi".into(), 10).unwrap().hits.is_empty());
+    }
+
+    /// Replies with a fixed text, streamed word by word, and records the prompt.
+    struct FakeGen {
+        reply: String,
+        seen: Arc<Mutex<String>>,
+    }
+
+    impl Generator for FakeGen {
+        fn model_id(&self) -> &str {
+            "fake@1"
+        }
+        fn generate(
+            &mut self,
+            system: &str,
+            user: &str,
+            _max: usize,
+            on_text: &mut dyn FnMut(&str) -> bool,
+        ) -> crate::Result<(String, crate::generate::GenStats)> {
+            *self.seen.lock().unwrap() = format!("{system}\n{user}");
+            for w in self.reply.split_inclusive(' ') {
+                if !on_text(w) {
+                    break;
+                }
+            }
+            Ok((self.reply.clone(), Default::default()))
+        }
+    }
+
+    struct Collect(Arc<Mutex<String>>);
+    impl AnswerListener for Collect {
+        fn on_text(&self, text: String) -> bool {
+            self.0.lock().unwrap().push_str(&text);
+            true
+        }
+    }
+
+    fn engine_with(reply: &str) -> (Arc<Engine>, Arc<Mutex<String>>) {
+        let e = Engine::in_memory().unwrap();
+        e.grant(SourceKind::Messages).unwrap();
+        e.index(vec![rec(SourceKind::Messages, "m1", "cabin wifi password is Tamarack")])
+            .unwrap();
+        let seen = Arc::new(Mutex::new(String::new()));
+        e.set_generator(Box::new(FakeGen {
+            reply: reply.into(),
+            seen: seen.clone(),
+        }));
+        (e, seen)
+    }
+
+    #[test]
+    fn answer_cites_passages_and_drops_invalid_numbers() {
+        let (e, seen) = engine_with("The cabin wifi password is Tamarack [1] [4].");
+        let streamed = Arc::new(Mutex::new(String::new()));
+        let a = e
+            .answer("cabin wifi password".into(), 0, Box::new(Collect(streamed.clone())))
+            .unwrap();
+        assert!(a.found);
+        assert_eq!(a.text, "The cabin wifi password is Tamarack [1].");
+        assert_eq!(a.cited, vec![1]);
+        assert_eq!(a.passages[0].item_id, "m1");
+        assert_eq!(a.stats.model_id, "fake@1");
+        assert_eq!(*streamed.lock().unwrap(), "The cabin wifi password is Tamarack [1] [4].");
+        let prompt = seen.lock().unwrap();
+        assert!(prompt.contains("[1] Text message from Dana ("), "{prompt}");
+        assert!(prompt.contains("Question: cabin wifi password"));
+    }
+
+    #[test]
+    fn uncited_or_refused_answers_are_not_found() {
+        let (e, _) = engine_with("The password is Tamarack.");
+        let a = e
+            .answer("cabin wifi password".into(), 0, Box::new(Collect(Default::default())))
+            .unwrap();
+        assert!(!a.found, "an answer without a citation must not be shown as found");
+        assert_eq!(a.text, NOT_FOUND);
+        assert_eq!(a.passages.len(), 1, "passages still shown as ranked results");
+
+        let (e, _) = engine_with(NOT_FOUND);
+        let a = e
+            .answer("cabin wifi password".into(), 0, Box::new(Collect(Default::default())))
+            .unwrap();
+        assert!(!a.found);
+    }
+
+    #[test]
+    fn no_passages_skips_the_model_and_no_model_is_an_error() {
+        let (e, seen) = engine_with("should not run [1]");
+        let a = e
+            .answer("dentist appointment".into(), 0, Box::new(Collect(Default::default())))
+            .unwrap();
+        assert!(!a.found);
+        assert!(a.passages.is_empty());
+        assert!(seen.lock().unwrap().is_empty(), "model must not run without passages");
+
+        e.unload_generator();
+        assert!(!e.generator_loaded());
+        assert!(matches!(
+            e.answer("wifi".into(), 0, Box::new(Collect(Default::default()))),
+            Err(SeeqoraError::Model(_))
+        ));
     }
 }
