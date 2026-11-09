@@ -32,6 +32,11 @@ jobs:
           [ -f eval/golden/baseline-oracle.json ] && BASE="--baseline eval/golden/baseline-oracle.json"
           ./target/release/seeqora-eval --golden eval/golden --oracle-filters --json eval-results-oracle.json $BASE \
             | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Retrieval (keyword only, informational)
+        run: |
+          set -o pipefail
+          ./target/release/seeqora-eval --golden eval/golden --keyword-only --json eval-results-keyword.json \
+            | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

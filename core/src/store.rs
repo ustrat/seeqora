@@ -54,10 +54,11 @@ CREATE TABLE IF NOT EXISTS embeddings (
     vector    BLOB NOT NULL
 );
 
+-- Porter stemming so "changed" matches "change" and "plants" matches "Planting".
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     text,
     chunk_id UNINDEXED,
-    tokenize = 'unicode61 remove_diacritics 2'
+    tokenize = 'porter unicode61 remove_diacritics 2'
 );
 "#;
 
