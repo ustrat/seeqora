@@ -1,0 +1,23 @@
+[
+  {
+    "name": "minilm-l6-v2",
+    "repo": "sentence-transformers/all-MiniLM-L6-v2",
+    "license": "Apache-2.0",
+    "pooling": "mean",
+    "query_prefix": ""
+  },
+  {
+    "name": "bge-small-en-v1.5",
+    "repo": "BAAI/bge-small-en-v1.5",
+    "license": "MIT",
+    "pooling": "cls",
+    "query_prefix": "Represent this sentence for searching relevant passages: "
+  },
+  {
+    "name": "arctic-embed-xs",
+    "repo": "Snowflake/snowflake-arctic-embed-xs",
+    "license": "Apache-2.0",
+    "pooling": "cls",
+    "query_prefix": "Represent this sentence for searching relevant passages: "
+  }
+]

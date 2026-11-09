@@ -19,3 +19,9 @@ serde_json = "1"
 sha2 = "0.10"
 hex = "0.4"
 thiserror = "1"
+# On-device sentence embeddings, pure Rust on CPU (W4). No default features: no
+# network downloads, no progress bars, no C++ suffix-array build.
+candle-core = "0.11"
+candle-nn = "0.11"
+candle-transformers = "0.11"
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }

@@ -18,6 +18,7 @@
 //! is given and any metric dropped more than 2 points.
 
 use chrono::DateTime;
+use seeqora_core::bert::BertEmbedder;
 use seeqora_core::embed::{Embedder, HashEmbedder};
 use seeqora_core::record::{Record, SourceKind};
 use seeqora_core::retrieve::{embed_pending, hybrid_search};
@@ -76,6 +77,8 @@ struct Args {
     golden: PathBuf,
     oracle_filters: bool,
     keyword_only: bool,
+    /// Embedding model directory (see `seeqora_core::bert`); default is the test hash embedder.
+    model: Option<PathBuf>,
     json_out: Option<PathBuf>,
     baseline: Option<PathBuf>,
     gate: bool,
@@ -98,6 +101,7 @@ fn parse_args() -> Result<Args, String> {
         golden: PathBuf::from("eval/golden"),
         oracle_filters: false,
         keyword_only: false,
+        model: None,
         json_out: None,
         baseline: None,
         gate: false,
@@ -108,6 +112,7 @@ fn parse_args() -> Result<Args, String> {
             "--golden" => a.golden = it.next().ok_or("--golden needs a path")?.into(),
             "--oracle-filters" => a.oracle_filters = true,
             "--keyword-only" => a.keyword_only = true,
+            "--model" => a.model = Some(it.next().ok_or("--model needs a directory")?.into()),
             "--json" => a.json_out = Some(it.next().ok_or("--json needs a path")?.into()),
             "--baseline" => a.baseline = Some(it.next().ok_or("--baseline needs a path")?.into()),
             "--gate" => a.gate = true,
@@ -183,8 +188,12 @@ fn to_filters(f: Option<&ExpectedFilters>) -> Result<Filters, String> {
 }
 
 fn evaluate(args: &Args) -> Result<(Vec<Outcome>, usize, usize, String), String> {
-    let embedder = HashEmbedder::new(256);
-    let (store, items) = build_store(&args.golden, &embedder)?;
+    let embedder: Box<dyn Embedder> = match &args.model {
+        Some(dir) => Box::new(BertEmbedder::load(dir).map_err(|e| format!("{}: {e}", dir.display()))?),
+        None => Box::new(HashEmbedder::new(256)),
+    };
+    let embedder: &dyn Embedder = embedder.as_ref();
+    let (store, items) = build_store(&args.golden, embedder)?;
     let chunks = store.count_chunks().map_err(|e| e.to_string())?;
     let questions: Vec<Question> = read_jsonl(&args.golden.join("questions.jsonl"))?;
 
@@ -196,7 +205,7 @@ fn evaluate(args: &Args) -> Result<(Vec<Outcome>, usize, usize, String), String>
         } else {
             Filters::default()
         };
-        let dense: Option<&dyn Embedder> = if args.keyword_only { None } else { Some(&embedder) };
+        let dense: Option<&dyn Embedder> = if args.keyword_only { None } else { Some(embedder) };
         let r = hybrid_search(&store, dense, &q.question, &filters, 10)
             .map_err(|e| e.to_string())?;
         let mut ranked: Vec<(SourceKind, String)> = Vec::new();

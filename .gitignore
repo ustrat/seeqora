@@ -51,3 +51,7 @@ android/app/src/main/generated/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Downloaded embedding models (scripts/fetch-models.sh)
+/models/
+*.safetensors
