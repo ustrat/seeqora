@@ -20,4 +20,6 @@ Jetpack Compose app plus read-only platform adapters. **Owns platform data acces
 - **Privacy:** biometric gate (default on after first index); `FLAG_SECURE` on answer screens.
 - **Generator:** Gemini Nano through AICore when available, llama.cpp (Vulkan/OpenCL) otherwise, behind the core `Generator` interface.
 
-*Not started. The Gradle project lands in Phase 0 W1 as an empty shell that links the core.*
+**Build:** `bash scripts/build-android.sh` (needs the NDK and `ANDROID_NDK_HOME`), then `gradle -p android assembleDebug`. CI uploads a debug APK on every run. A Gradle wrapper will be added once a JDK is available locally.
+
+*Phase 0 W1: an empty shell that links the core and shows `coreVersion()`.*

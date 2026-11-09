@@ -24,7 +24,11 @@ models/
 *.db-wal
 *.db-shm
 
-# iOS
+# iOS (project is generated from ios/project.yml; core artifacts from scripts/build-ios.sh)
+ios/build/
+ios/Frameworks/
+ios/Seeqora/Generated/
+ios/*.xcodeproj/
 ios/**/xcuserdata/
 ios/**/DerivedData/
 ios/**/*.xcframework/
@@ -35,6 +39,8 @@ ios/**/*.xcframework/
 android/**/.gradle/
 android/**/build/
 android/local.properties
+android/app/src/main/jniLibs/
+android/app/src/main/generated/
 *.apk
 *.aab
 *.jks

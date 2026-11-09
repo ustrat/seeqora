@@ -15,7 +15,13 @@ pub mod store;
 
 pub use error::{CoreError, Result};
 
+uniffi::setup_scaffolding!();
+
 /// Core version; shells display it and the release tag must match it.
-pub fn core_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+///
+/// The FFI surface is deliberately tiny. Shells get a facade over ingestion
+/// and answering, never direct access to retrieval (Licensing rules).
+#[uniffi::export]
+pub fn core_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
 }

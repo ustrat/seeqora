@@ -7,8 +7,11 @@ publish.workspace = true
 
 [lib]
 name = "seeqora_core"
+# staticlib -> iOS XCFramework; cdylib -> Android .so and binding generation.
+crate-type = ["lib", "staticlib", "cdylib"]
 
 [dependencies]
+uniffi = "0.28"
 # Bundled SQLite includes FTS5 and JSON1. sqlite-vec is added in Phase 0 W4.
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
