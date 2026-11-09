@@ -42,7 +42,10 @@ jobs:
           path: models
           key: embed-models-${{ hashFiles('eval/models.json') }}
       - name: Fetch candidate embedding models
-        run: bash scripts/fetch-models.sh models
+        run: |
+          bash scripts/fetch-models.sh models
+          # The shipping model exactly as bundled in the app (F16), scored alongside.
+          bash scripts/bundle-model.sh models/bge-small-en-v1.5-f16-shipping
       - name: Embedding model comparison (W4, informational)
         run: |
           set -o pipefail

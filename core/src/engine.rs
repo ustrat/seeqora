@@ -6,6 +6,8 @@
 //! search runs keyword-only and returns the degraded notice for the shell to
 //! show (T9).
 
+use crate::bert::BertEmbedder;
+use crate::embed::Embedder;
 use crate::error::CoreError;
 use crate::record::{Record, SourceKind};
 use crate::retrieve::hybrid_search;
@@ -92,12 +94,24 @@ pub struct SearchResults {
 #[derive(uniffi::Object)]
 pub struct Engine {
     store: Mutex<Store>,
+    embedder: Mutex<Option<Arc<BertEmbedder>>>,
 }
 
 impl Engine {
+    fn new(store: Store) -> Arc<Self> {
+        Arc::new(Self {
+            store: Mutex::new(store),
+            embedder: Mutex::new(None),
+        })
+    }
+
     fn store(&self) -> MutexGuard<'_, Store> {
         // A panic elsewhere must not lock the user out of their index.
         self.store.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn embedder(&self) -> Option<Arc<BertEmbedder>> {
+        self.embedder.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 }
 
@@ -106,16 +120,44 @@ impl Engine {
     /// Open (or create) the index file at `path`.
     #[uniffi::constructor]
     pub fn open(path: String) -> FfiResult<Arc<Self>> {
-        Ok(Arc::new(Self {
-            store: Mutex::new(Store::open(path)?),
-        }))
+        Ok(Self::new(Store::open(path)?))
     }
 
     #[uniffi::constructor]
     pub fn in_memory() -> FfiResult<Arc<Self>> {
-        Ok(Arc::new(Self {
-            store: Mutex::new(Store::open_in_memory()?),
-        }))
+        Ok(Self::new(Store::open_in_memory()?))
+    }
+
+    /// Load the embedding model from a model directory (see `bert`). Until
+    /// this succeeds, search is keyword-only and says so (T9). Returns the
+    /// model id.
+    pub fn load_embedder(&self, dir: String) -> FfiResult<String> {
+        let e = BertEmbedder::load(std::path::Path::new(&dir))?;
+        let id = e.model_id().to_string();
+        *self.embedder.lock().unwrap_or_else(|p| p.into_inner()) = Some(Arc::new(e));
+        Ok(id)
+    }
+
+    /// Chunks still waiting for a vector from the loaded model (0 if none loaded).
+    pub fn embedding_backlog(&self) -> FfiResult<i64> {
+        let Some(e) = self.embedder() else { return Ok(0) };
+        Ok(self.store().count_needing_embedding(e.model_id())? as i64)
+    }
+
+    /// Embed up to `max` waiting chunks. The model runs outside the store lock,
+    /// so search stays responsive. Returns how many were stored (0 = done).
+    pub fn embed_next(&self, max: u32) -> FfiResult<i64> {
+        let Some(e) = self.embedder() else { return Ok(0) };
+        let pending = self.store().chunks_needing_embedding(e.model_id(), max as usize)?;
+        if pending.is_empty() {
+            return Ok(0);
+        }
+        let texts: Vec<&str> = pending.iter().map(|(_, t)| t.as_str()).collect();
+        let vectors = e.embed(&texts)?;
+        let rows: Vec<(String, Vec<f32>)> = pending.into_iter().map(|(id, _)| id).zip(vectors).collect();
+        // Chunks deleted meanwhile are skipped by the store; the batch still counts as progress.
+        self.store().put_embeddings(e.model_id(), &rows)?;
+        Ok(rows.len() as i64)
     }
 
     pub fn sources(&self) -> FfiResult<Vec<SourceStatus>> {
@@ -188,8 +230,10 @@ impl Engine {
     /// Search switched-on sources. Revoked sources have no rows left, so they
     /// can never appear.
     pub fn search(&self, query: String, top_n: u32) -> FfiResult<SearchResults> {
+        let embedder = self.embedder();
+        let dense = embedder.as_deref().map(|e| e as &dyn Embedder);
         let s = self.store();
-        let r = hybrid_search(&s, None, &query, &Filters::default(), top_n as usize)?;
+        let r = hybrid_search(&s, dense, &query, &Filters::default(), top_n as usize)?;
         let mut hits = Vec::with_capacity(r.hits.len());
         for h in r.hits {
             if let Some(c) = s.get_chunk(&h.chunk_id)? {

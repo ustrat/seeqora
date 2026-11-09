@@ -16,7 +16,11 @@ import com.ustrat.seeqora.adapters.ContactsAdapter
 import com.ustrat.seeqora.adapters.FilesAdapter
 import com.ustrat.seeqora.adapters.MessagesAdapter
 import com.ustrat.seeqora.adapters.PhotosAdapter
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -27,6 +31,10 @@ import uniffi.seeqora_core.SourceKind
 import uniffi.seeqora_core.SourceRecord
 import uniffi.seeqora_core.SourceStatus
 import java.io.File
+
+/** The shipping embedding model, bundled under assets/models/ (docs/DECISION_LOG.md). */
+const val MODEL_NAME = "bge-small-en-v1.5"
+private const val EMBED_BATCH = 32u
 
 /** One index per process; the core serializes access internally. */
 object CoreHolder {
@@ -76,6 +84,15 @@ class AppState(private val context: Context, private val engine: Engine) {
     var filesFolder by mutableStateOf(prefs.getString("files_tree", null)?.let(Uri::parse))
         private set
 
+    /** Loaded embedding model id, or null while search is keyword-only. */
+    var modelId by mutableStateOf<String?>(null)
+        private set
+    /** "Understanding meaning 120 / 900" while the backlog is embedded; null when idle. */
+    var embedStatus by mutableStateOf<String?>(null)
+        private set
+    private val background = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var embedJob: Job? = null
+
     val sourceList: List<SourceInfo> get() = if (sampleMode) DEMO_SOURCES else PHONE_SOURCES
     val anyGranted: Boolean get() = sources.any { it.granted }
 
@@ -97,6 +114,57 @@ class AppState(private val context: Context, private val engine: Engine) {
         if (prefs.contains("sample_mode")) return
         withContext(Dispatchers.IO) { engine.deleteEverything() }
         prefs.edit().putBoolean("sample_mode", false).apply()
+    }
+
+    /**
+     * Copy the bundled embedding model out of the APK (once per app install or
+     * update) and load it. On failure search stays keyword-only and says so (T9).
+     */
+    suspend fun loadModel(): String? = withContext(Dispatchers.IO) {
+        try {
+            val dir = File(context.filesDir, "models/$MODEL_NAME")
+            val stamp = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime.toString()
+            val marker = File(dir, ".copied")
+            if (!marker.exists() || marker.readText() != stamp) {
+                dir.mkdirs()
+                val files = context.assets.list("models/$MODEL_NAME").orEmpty()
+                if (files.isEmpty()) error("this build has no embedding model")
+                for (f in files) {
+                    context.assets.open("models/$MODEL_NAME/$f").use { input ->
+                        File(dir, f).outputStream().use { input.copyTo(it, 1 shl 20) }
+                    }
+                }
+                marker.writeText(stamp)
+            }
+            modelId = engine.loadEmbedder(dir.path)
+            embedInBackground()
+            null
+        } catch (e: Exception) {
+            "Meaning search is unavailable: ${e.message}"
+        }
+    }
+
+    /** Embed every chunk that has no vector yet, a batch at a time, off the main thread. */
+    fun embedInBackground() {
+        if (modelId == null || embedJob?.isActive == true) return
+        embedJob = background.launch {
+            try {
+                var total = engine.embeddingBacklog()
+                var done = 0L
+                while (total > 0) {
+                    embedStatus = "Understanding meaning: $done / $total"
+                    val n = engine.embedNext(EMBED_BATCH)
+                    if (n == 0L) break
+                    done += n
+                    if (done > total) total = done
+                }
+            } catch (e: Exception) {
+                embedStatus = null
+                return@launch
+            }
+            embedStatus = null
+            withContext(Dispatchers.Main) { version++ }
+        }
     }
 
     suspend fun refresh() {
@@ -180,6 +248,7 @@ class AppState(private val context: Context, private val engine: Engine) {
         } finally {
             progress.remove(kind)
             busy = busy - kind
+            embedInBackground()
         }
     }
 

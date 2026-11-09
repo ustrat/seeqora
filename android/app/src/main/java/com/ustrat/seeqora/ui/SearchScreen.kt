@@ -155,6 +155,10 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
         )
 
+        state.embedStatus?.let { status ->
+            Notice("$status. Results get smarter as this finishes; keep the app open.")
+            Spacer(Modifier.height(12.dp))
+        }
         when {
             !state.loaded -> Unit
             !state.anyGranted -> NoSources(onChooseSources)

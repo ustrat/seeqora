@@ -54,4 +54,5 @@ Thumbs.db
 
 # Downloaded embedding models (scripts/fetch-models.sh)
 /models/
+android/app/src/main/assets/models/
 *.safetensors
