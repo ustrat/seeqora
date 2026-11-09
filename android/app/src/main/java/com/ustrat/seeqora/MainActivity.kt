@@ -1,6 +1,8 @@
 package com.ustrat.seeqora
 
+import android.os.Build
 import android.os.Bundle
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -37,6 +39,7 @@ import com.ustrat.seeqora.ui.SearchScreen
 import com.ustrat.seeqora.ui.SeeqoraTheme
 import com.ustrat.seeqora.ui.SourcesScreen
 import kotlinx.coroutines.launch
+import uniffi.seeqora_core.Engine
 import uniffi.seeqora_core.coreVersion
 
 class MainActivity : ComponentActivity() {
@@ -47,7 +50,13 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
-        val opened = runCatching { CoreHolder.get(applicationContext) }
+        // The arm64 core is built with ARMv8.2 dotprod; on an older CPU loading
+        // it would crash, so refuse plainly before the first core call (T9).
+        val opened = if (!cpuSupported()) {
+            Result.failure<Engine>(IllegalStateException("This test build needs a newer processor (ARMv8.2 dot-product instructions)."))
+        } else {
+            runCatching { CoreHolder.get(applicationContext) }
+        }
         setContent {
             SeeqoraTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -59,6 +68,16 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
+
+/** arm64 phones must report the dot-product extension; x86_64 (emulator) builds don't use it. */
+private fun cpuSupported(): Boolean {
+    if (Build.SUPPORTED_ABIS.firstOrNull() != "arm64-v8a") return true
+    return runCatching {
+        File("/proc/cpuinfo").readLines()
+            .filter { it.startsWith("Features") }
+            .all { "asimddp" in it.split(Regex("\\s+")) }
+    }.getOrDefault(true)
 }
 
 private const val TAB_UNSET = -1

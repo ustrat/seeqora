@@ -39,6 +39,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import uniffi.seeqora_core.Answer
 import uniffi.seeqora_core.AnswerStats
+import uniffi.seeqora_core.engineInfo
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -97,6 +98,7 @@ private class AnswerUi(val question: String) {
     var answer by mutableStateOf<Answer?>(null)
     var error by mutableStateOf<String?>(null)
     var peakMb by mutableStateOf<Long?>(null)
+    var engine by mutableStateOf<String?>(null)
 }
 
 @Composable
@@ -127,6 +129,7 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
                 onDelta = { ui.status = null; ui.streamed += it },
             )
             ui.peakMb = state.peakMemoryMb()
+            ui.engine = runCatching { engineInfo() }.getOrNull()
             ui.answer = a
         } catch (e: CancellationException) {
             throw e
@@ -311,6 +314,14 @@ private fun AnswerCard(ui: AnswerUi, onOpen: (SearchHit) -> Unit) {
                             )
                         }
                     }
+                    if (a.attributed) {
+                        Text(
+                            "The model didn't cite a source, so Seeqora matched this one. Check it before relying on the answer.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
                 }
                 else -> Text(
                     if (a.passages.isEmpty()) "I couldn't find that in your data."
@@ -321,7 +332,7 @@ private fun AnswerCard(ui: AnswerUi, onOpen: (SearchHit) -> Unit) {
             a?.let { ans ->
                 if (ans.stats.promptTokens > 0u) {
                     Text(
-                        timingLine(ans.stats, ui.peakMb),
+                        timingLine(ans.stats, ui.peakMb) + (ui.engine?.let { " · $it" } ?: ""),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                         modifier = Modifier.padding(top = 12.dp),

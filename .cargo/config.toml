@@ -1,0 +1,6 @@
+# Android arm64: use the SDOT instruction (ARMv8.2 dotprod). Without it candle
+# emulates the int8 dot products that quantized answer models spend their time
+# in. Phones without dotprod (ARMv8.0) are refused at startup by the app.
+# Sideload builds only; see docs/DECISION_LOG.md.
+[target.aarch64-linux-android]
+rustflags = ["-C", "target-feature=+dotprod"]
