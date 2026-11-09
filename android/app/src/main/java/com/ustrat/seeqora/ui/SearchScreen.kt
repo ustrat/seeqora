@@ -2,6 +2,8 @@
 
 package com.ustrat.seeqora.ui
 
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.size
@@ -90,6 +92,7 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var open by remember { mutableStateOf<SearchHit?>(null) }
     val focus = LocalFocusManager.current
+    val ctx = LocalContext.current
 
     LaunchedEffect(query, state.version) {
         if (query.isBlank()) {
@@ -155,14 +158,33 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
         when {
             !state.loaded -> Unit
             !state.anyGranted -> NoSources(onChooseSources)
-            query.isBlank() -> Suggestions(onPick = { query = it; focus.clearFocus() })
+            query.isBlank() && state.sampleMode -> Suggestions(onPick = { query = it; focus.clearFocus() })
+            query.isBlank() -> Text(
+                "Try a name, a place, or a few words you remember from a message, note, event or photo.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp),
+            )
             error != null -> Notice("Search failed: $error")
             else -> results?.let { r -> Results(r, query, onOpen = { open = it }) }
         }
     }
 
     open?.let { hit ->
-        ModalBottomSheet(onDismissRequest = { open = null }) { HitDetail(hit) }
+        ModalBottomSheet(
+            onDismissRequest = { open = null },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            HitDetail(
+                hit,
+                canOpen = state.canOpen(hit),
+                onOpen = {
+                    if (!state.openOriginal(hit)) {
+                        Toast.makeText(ctx, "No app on this phone can open that item.", Toast.LENGTH_SHORT).show()
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -233,7 +255,7 @@ private fun ResultCard(hit: SearchHit, stems: List<String>, mark: Color, onClick
 
 /** Tap-through to the cited passage and its original (T2). */
 @Composable
-private fun HitDetail(hit: SearchHit) {
+private fun HitDetail(hit: SearchHit, canOpen: Boolean, onOpen: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -266,13 +288,19 @@ private fun HitDetail(hit: SearchHit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 16.dp),
         )
-        Text(hit.uri, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
-        Text(
-            "Demo data. On a real phone, this opens the original in its own app.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
-        )
+        if (canOpen) {
+            Button(onClick = onOpen, modifier = Modifier.padding(top = 8.dp)) {
+                Text("Open in ${kindApp(hit.source)}")
+            }
+        } else {
+            Text(hit.uri, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
+            Text(
+                "Sample data. For your own items, this opens the original in its own app.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
         Text(
             "Why this result",
             style = MaterialTheme.typography.labelMedium,
@@ -372,16 +400,28 @@ private fun kindLabel(kind: SourceKind): String = when (kind) {
     SourceKind.MEDIA -> "Media"
 }
 
+private fun kindApp(kind: SourceKind): String = when (kind) {
+    SourceKind.MESSAGES -> "Messages"
+    SourceKind.CONTACTS -> "Contacts"
+    SourceKind.CALENDAR -> "Calendar"
+    SourceKind.PHOTOS -> "Photos"
+    else -> "its app"
+}
+
 /** Who or what the result came from: the visible half of the citation (T2). */
 private fun citationLabel(hit: SearchHit): String {
     val m = hit.metadata
     return when (hit.source) {
-        SourceKind.MESSAGES -> m["sender"]?.let { "From $it" } ?: "Message"
+        SourceKind.MESSAGES -> when (val s = m["sender"]) {
+            null -> "Message"
+            "Me" -> m["to"]?.let { "You to $it" } ?: "Sent by you"
+            else -> "From $s"
+        }
         SourceKind.NOTES -> m["title"] ?: "Note"
         SourceKind.FILES -> m["filename"] ?: "Document"
         SourceKind.CONTACTS -> m["name"] ?: "Contact"
         SourceKind.CALENDAR -> m["title"] ?: "Event"
-        SourceKind.PHOTOS -> m["kind"]?.replaceFirstChar { it.uppercase() } ?: "Photo"
+        SourceKind.PHOTOS -> m["filename"] ?: m["kind"]?.replaceFirstChar { it.uppercase() } ?: "Photo"
         else -> m["title"] ?: kindLabel(hit.source)
     }
 }

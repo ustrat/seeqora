@@ -70,16 +70,19 @@ fun App(state: AppState) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var tab by rememberSaveable { mutableIntStateOf(TAB_UNSET) }
-    LaunchedEffect(Unit) {
-        state.refresh()
-        // First run: nothing is switched on, so start on the consent screen.
-        if (tab == TAB_UNSET) tab = if (state.anyGranted) TAB_SEARCH else TAB_SOURCES
-    }
     val say: (String) -> Unit = { msg ->
         scope.launch {
             snackbar.currentSnackbarData?.dismiss()
             snackbar.showSnackbar(msg)
         }
+    }
+    LaunchedEffect(Unit) {
+        state.refresh()
+        // First run: nothing is switched on, so start on the consent screen.
+        if (tab == TAB_UNSET) tab = if (state.anyGranted) TAB_SEARCH else TAB_SOURCES
+        // Pick up new messages, contacts, events and files. Unchanged items are
+        // skipped by the core; photo OCR only runs on an explicit refresh (T5).
+        state.syncAll(includePhotos = false)?.let(say)
     }
 
     Scaffold(
