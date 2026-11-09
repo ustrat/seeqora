@@ -1,0 +1,16 @@
+[package]
+name = "seeqora-eval"
+description = "Golden-set retrieval evaluation for seeqora-core (T10)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "seeqora-eval"
+path = "src/main.rs"
+
+[dependencies]
+seeqora-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
