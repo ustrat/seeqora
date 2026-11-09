@@ -29,4 +29,4 @@ Jetpack Compose app plus read-only platform adapters. **Owns platform data acces
 
 Data comes from the golden-set fixtures in [`../eval/golden/fixtures`](../eval/golden/fixtures), bundled as assets. That is the same synthetic phone the eval measures. Real adapters replace it from W3 on.
 
-**Try it in an emulator:** download the `app-debug` artifact from the latest `ci` run, then run `adb install app-debug.apk`.
+**Try it in an emulator:** download the `seeqora-debug-apk` artifact from the latest `ci` run, then run `adb install app-debug.apk`.
