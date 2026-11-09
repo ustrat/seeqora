@@ -75,6 +75,7 @@ struct Question {
 struct Args {
     golden: PathBuf,
     oracle_filters: bool,
+    keyword_only: bool,
     json_out: Option<PathBuf>,
     baseline: Option<PathBuf>,
     gate: bool,
@@ -96,6 +97,7 @@ fn parse_args() -> Result<Args, String> {
     let mut a = Args {
         golden: PathBuf::from("eval/golden"),
         oracle_filters: false,
+        keyword_only: false,
         json_out: None,
         baseline: None,
         gate: false,
@@ -105,6 +107,7 @@ fn parse_args() -> Result<Args, String> {
         match x.as_str() {
             "--golden" => a.golden = it.next().ok_or("--golden needs a path")?.into(),
             "--oracle-filters" => a.oracle_filters = true,
+            "--keyword-only" => a.keyword_only = true,
             "--json" => a.json_out = Some(it.next().ok_or("--json needs a path")?.into()),
             "--baseline" => a.baseline = Some(it.next().ok_or("--baseline needs a path")?.into()),
             "--gate" => a.gate = true,
@@ -193,7 +196,8 @@ fn evaluate(args: &Args) -> Result<(Vec<Outcome>, usize, usize, String), String>
         } else {
             Filters::default()
         };
-        let r = hybrid_search(&store, Some(&embedder), &q.question, &filters, 10)
+        let dense: Option<&dyn Embedder> = if args.keyword_only { None } else { Some(&embedder) };
+        let r = hybrid_search(&store, dense, &q.question, &filters, 10)
             .map_err(|e| e.to_string())?;
         let mut ranked: Vec<(SourceKind, String)> = Vec::new();
         for h in &r.hits {
@@ -225,7 +229,12 @@ fn evaluate(args: &Args) -> Result<(Vec<Outcome>, usize, usize, String), String>
                 .collect(),
         });
     }
-    Ok((out, items, chunks, embedder.model_id().to_string()))
+    let model = if args.keyword_only {
+        "none (keyword only)".to_string()
+    } else {
+        embedder.model_id().to_string()
+    };
+    Ok((out, items, chunks, model))
 }
 
 fn ratio(n: usize, d: usize) -> f64 {
