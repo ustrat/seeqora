@@ -4,8 +4,10 @@
     <!-- allowBackup=false: the index is excluded from Google backup (Data and privacy doctrine). -->
     <application
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="Seeqora"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.Seeqora">
         <activity
             android:name=".MainActivity"
             android:exported="true">

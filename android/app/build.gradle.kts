@@ -19,7 +19,25 @@ android {
         }
     }
 
+    // One fixed sideload key, so every CI build installs over the previous one and
+    // keeps the user's index and consent. CI decodes it from repo secrets; without
+    // it (local builds) Gradle's per-machine debug key is used.
+    val sideloadKeystore = System.getenv("SEEQORA_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }
+    signingConfigs {
+        if (sideloadKeystore != null) {
+            create("sideload") {
+                storeFile = sideloadKeystore
+                storePassword = System.getenv("SEEQORA_KEYSTORE_PASSWORD")
+                keyAlias = "seeqora"
+                keyPassword = System.getenv("SEEQORA_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (sideloadKeystore != null) signingConfig = signingConfigs.getByName("sideload")
+        }
         release {
             isMinifyEnabled = false
         }

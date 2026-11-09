@@ -2,6 +2,15 @@
 
 package com.ustrat.seeqora.ui
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.withStyle
+import com.ustrat.seeqora.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -26,7 +35,6 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -102,12 +110,20 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
 
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 24.dp)) {
-            Text("Seeqora", style = MaterialTheme.typography.headlineMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(
+                    painter = painterResource(R.drawable.seeqora_mark),
+                    contentDescription = null,
+                    modifier = Modifier.size(44.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(wordmark(), style = WordmarkStyle)
+            }
             Text(
                 "Search what's on this phone. Nothing leaves it.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = 12.dp),
             )
         }
         OutlinedTextField(
@@ -124,6 +140,13 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
             },
             singleLine = true,
             shape = RoundedCornerShape(28.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                focusedBorderColor = Brand.Blue,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                focusedLeadingIconColor = Brand.Sky,
+            ),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
@@ -146,7 +169,7 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
 @Composable
 private fun Results(r: SearchResults, query: String, onOpen: (SearchHit) -> Unit) {
     val stems = remember(query) { queryStems(query) }
-    val mark = MaterialTheme.colorScheme.tertiaryContainer
+    val mark = MaterialTheme.colorScheme.primaryContainer
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -173,7 +196,12 @@ private fun Results(r: SearchResults, query: String, onOpen: (SearchHit) -> Unit
 
 @Composable
 private fun ResultCard(hit: SearchHit, stems: List<String>, mark: Color, onClick: () -> Unit) {
-    ElevatedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SourceBadge(hit.source)
@@ -323,6 +351,13 @@ private fun Suggestions(onPick: (String) -> Unit) {
 }
 
 // ---- formatting --------------------------------------------------------------
+
+/** "seeqora" with the q in brand blue, as in the logo. */
+private fun wordmark(): AnnotatedString = buildAnnotatedString {
+    append("see")
+    withStyle(SpanStyle(color = Brand.Blue, fontWeight = FontWeight.Normal)) { append("q") }
+    append("ora")
+}
 
 private fun kindLabel(kind: SourceKind): String = when (kind) {
     SourceKind.MESSAGES -> "Message"
