@@ -47,7 +47,19 @@ jobs:
         with:
           gradle-version: "8.10.2"
       - run: bash scripts/build-android.sh
+      - name: Sideload signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.SEEQORA_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/sideload.jks"
+            echo "SEEQORA_KEYSTORE=$RUNNER_TEMP/sideload.jks" >> "$GITHUB_ENV"
+          else
+            echo "No signing secret: building with the runner's debug key"
+          fi
       - run: gradle -p android assembleDebug --no-daemon
+        env:
+          SEEQORA_KEYSTORE_PASSWORD: ${{ secrets.SEEQORA_KEYSTORE_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: seeqora-debug-apk
