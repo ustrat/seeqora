@@ -106,11 +106,7 @@ pub fn hybrid_search(
 
     let (dense, degraded) = match embedder {
         Some(e) => {
-            let qv = e
-                .embed(&[query])?
-                .into_iter()
-                .next()
-                .ok_or_else(|| CoreError::Embedding("empty query embedding".into()))?;
+            let qv = e.embed_query(query)?;
             let d = store
                 .dense_search(&qv, e.model_id(), filters, DENSE_K)?
                 .into_iter()

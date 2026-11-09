@@ -350,6 +350,33 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// How many chunks still have no vector for `model_id` (progress display).
+    pub fn count_needing_embedding(&self, model_id: &str) -> Result<usize> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM chunks c
+             LEFT JOIN embeddings e ON e.chunk_id = c.chunk_id AND e.model_id = ?1
+             WHERE e.chunk_id IS NULL",
+            params![model_id],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
+    }
+
+    /// Store a batch of vectors in one transaction. Chunks deleted since the
+    /// batch was read are skipped (their foreign key is gone).
+    pub fn put_embeddings(&mut self, model_id: &str, rows: &[(String, Vec<f32>)]) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        let mut n = 0;
+        for (id, v) in rows {
+            n += tx.execute(
+                "INSERT OR REPLACE INTO embeddings (chunk_id, model_id, dims, vector)
+                 SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM chunks WHERE chunk_id = ?1)",
+                params![id, model_id, v.len() as i64, vec_to_blob(v)],
+            )?;
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
     pub fn put_embedding(&mut self, chunk_id: &str, model_id: &str, v: &[f32]) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO embeddings (chunk_id, model_id, dims, vector)

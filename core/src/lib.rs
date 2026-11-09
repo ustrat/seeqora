@@ -6,6 +6,7 @@
 //! Pipeline: [`record::Record`] -> [`chunk::chunk_record`] -> [`store::Store`]
 //! (items, chunks, embeddings, FTS5, sources) -> [`retrieve::hybrid_search`].
 
+pub mod bert;
 pub mod chunk;
 pub mod embed;
 pub mod engine;

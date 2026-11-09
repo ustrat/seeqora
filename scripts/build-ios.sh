@@ -6,6 +6,10 @@
 # is not on PATH (no Homebrew or sudo required).
 set -euo pipefail
 
+# Match the app's minimum (ios/project.yml). Rust's default iOS 10 target cannot
+# link C code built by the current SDK (missing ___chkstk_darwin).
+export IPHONEOS_DEPLOYMENT_TARGET=17.0
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 

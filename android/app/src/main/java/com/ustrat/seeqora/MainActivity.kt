@@ -81,6 +81,8 @@ fun App(state: AppState) {
         state.refresh()
         // First run: nothing is switched on, so start on the consent screen.
         if (tab == TAB_UNSET) tab = if (state.anyGranted) TAB_SEARCH else TAB_SOURCES
+        // Meaning search: load the bundled model, then embed anything not yet embedded.
+        state.loadModel()?.let(say)
         // Pick up new messages, contacts, events and files. Unchanged items are
         // skipped by the core; photo OCR only runs on an explicit refresh (T5).
         state.syncAll(includePhotos = false)?.let(say)

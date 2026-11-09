@@ -61,6 +61,12 @@ android {
     // search runs on the same data the eval measures. Replaced by real
     // adapters from W3 on.
     sourceSets["main"].assets.srcDir("../../eval/golden/fixtures")
+    // The embedding model (assets/models/, put there by scripts/bundle-model.sh)
+    // is copied to app storage on first launch; store it uncompressed so that
+    // copy is a straight read.
+    androidResources {
+        noCompress += listOf("safetensors")
+    }
 }
 
 dependencies {

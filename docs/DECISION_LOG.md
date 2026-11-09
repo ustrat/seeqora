@@ -8,7 +8,8 @@ To change a tenet, add a row here with the new decision and the tenet it replace
 | 2026-11-07 | SQLite + sqlite-vec + FTS5 as the only datastore | Decided | Single file, encrypted by the OS, no sync layer to secure |
 | 2026-11-07 | On-device generation by default, cloud per query only | Decided | Privacy is the product; cloud is a convenience, not a dependency |
 | 2026-11-07 | Retrieval quality gates every phase | Decided | A chat UI over bad retrieval produces confident wrong answers |
-| 2026-11-07 | Which embedding model ships first (quality vs. size vs. license) | Open | Run three candidates through the golden set in Phase 0 (plan: W4) |
+| 2026-11-07 | Which embedding model ships first (quality vs. size vs. license) | Decided 2026-11-09 | **bge-small-en-v1.5 (MIT)**, run in the core via candle, shipped at f16. Golden set v0, hybrid: R@10 0.867 / R@3 0.778 (oracle filters 0.956 / 0.911), vs 0.844 / 0.778 (0.956 / 0.889) for all-MiniLM-L6-v2 and snowflake-arctic-embed-xs. About 2x their compute and +22 MB; the margin is 1–2 questions of 45, so re-run when the set reaches 200 |
+| 2026-11-09 | Android sideload builds ahead of Gate 0 (real-data adapters, embeddings) | Decided | Owner asked for an installable full-function build; each stage still lands with a golden-set run |
 | 2026-11-07 | iOS messages: archive import only, or skip in v1? | Open | Depends on how many testers will export; decide after alpha survey |
 | 2026-11-07 | Minimum RAM for on-device LLM: 6 GB or 8 GB? | Open | Measure tokens/s and thermal throttling on 6 GB devices in Phase 1 |
 | 2026-11-07 | Business model: one-time purchase, subscription, or free + paid cloud? | Open | Affects whether a cloud path is built in Phase 3 at all |

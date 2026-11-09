@@ -1,15 +1,23 @@
 //! Embedding interface. Models are versioned assets behind this trait (T8);
-//! the core never hard-codes a model. Production runtimes (ONNX Runtime /
-//! Core ML / LiteRT) land in Phase 0 W4.
+//! the core never hard-codes a model. The production runtime is
+//! [`crate::bert::BertEmbedder`].
 
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 
 pub trait Embedder: Send + Sync {
-    /// Versioned id, e.g. `"e5-small-int8@1.0.0"`. Stored with every vector so a
+    /// Versioned id, e.g. `"bge-small-en-v1.5@1"`. Stored with every vector so a
     /// model change triggers a re-embed rather than mixing vector spaces.
     fn model_id(&self) -> &str;
     fn dims(&self) -> usize;
+    /// Embed passages (chunks).
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
+    /// Embed a search query. Models with a retrieval instruction override this.
+    fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
+        self.embed(&[query])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| CoreError::Embedding("empty query embedding".into()))
+    }
 }
 
 /// Cosine similarity. Returns 0.0 for mismatched or zero vectors.

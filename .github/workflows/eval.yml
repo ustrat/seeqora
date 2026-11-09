@@ -37,6 +37,27 @@ jobs:
           set -o pipefail
           ./target/release/seeqora-eval --golden eval/golden --keyword-only --json eval-results-keyword.json \
             | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/cache@v4
+        with:
+          path: models
+          key: embed-models-${{ hashFiles('eval/models.json') }}
+      - name: Fetch candidate embedding models
+        run: |
+          bash scripts/fetch-models.sh models
+          # The shipping model exactly as bundled in the app (F16), scored alongside.
+          bash scripts/bundle-model.sh models/bge-small-en-v1.5-f16-shipping
+      - name: Embedding model comparison (W4, informational)
+        run: |
+          set -o pipefail
+          for dir in models/*/; do
+            name=$(basename "$dir")
+            for mode in "" "--oracle-filters"; do
+              /usr/bin/time -f "$name ${mode:-no-filters}: %e s, %M KB peak" \
+                ./target/release/seeqora-eval --golden eval/golden --model "$dir" $mode \
+                  --json "eval-results-$name${mode:+-oracle}.json" \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
