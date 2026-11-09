@@ -16,6 +16,10 @@ pub enum CoreError {
 
     #[error("embedding failed: {0}")]
     Embedding(String),
+
+    /// The answer model could not load or run.
+    #[error("{0}")]
+    Generation(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;

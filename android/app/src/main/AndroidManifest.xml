@@ -33,6 +33,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- ML Kit logs usage through Google's datatransport library. Removing its
+             only upload backend means events are dropped instead of stored on the
+             phone for a later upload (there is no INTERNET permission either way). -->
+        <service
+            android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery"
+            android:exported="false">
+            <meta-data
+                android:name="backend:com.google.android.datatransport.cct.CctBackendFactory"
+                tools:node="remove" />
+        </service>
     </application>
 
 </manifest>

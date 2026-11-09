@@ -1,11 +1,13 @@
 package com.ustrat.seeqora
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -20,10 +22,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import uniffi.seeqora_core.Answer
+import uniffi.seeqora_core.AnswerListener
 import uniffi.seeqora_core.Engine
 import uniffi.seeqora_core.SearchHit
 import uniffi.seeqora_core.SearchResults
@@ -31,10 +37,23 @@ import uniffi.seeqora_core.SourceKind
 import uniffi.seeqora_core.SourceRecord
 import uniffi.seeqora_core.SourceStatus
 import java.io.File
+import java.util.TimeZone
+
+fun gb(bytes: Long): String = "%.1f GB".format(bytes / 1_000_000_000.0)
 
 /** The shipping embedding model, bundled under assets/models/ (docs/DECISION_LOG.md). */
 const val MODEL_NAME = "bge-small-en-v1.5"
 private const val EMBED_BATCH = 32u
+
+/** Answers: the Qwen2.5 tokenizer ships under assets/models/; the model file is imported by the user (T1). */
+private const val ANSWER_TOKENIZER = "qwen2.5"
+const val ANSWER_MODEL_NAME = "Qwen2.5 1.5B Instruct (Q4_K_M, 1.1 GB)"
+const val ANSWER_MODEL_URL =
+    "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+/** Below this, answers are off and search shows ranked passages (DECISION_LOG: RAM floor is still open). */
+private const val ANSWER_RAM_FLOOR = 5_500_000_000L
+/** Free the model's ~1.5 GB after 5 idle minutes (T5). */
+private const val IDLE_UNLOAD_MS = 5 * 60_000L
 
 /** One index per process; the core serializes access internally. */
 object CoreHolder {
@@ -93,6 +112,28 @@ class AppState(private val context: Context, private val engine: Engine) {
     private val background = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var embedJob: Job? = null
 
+    private val llmDir get() = File(context.filesDir, "models/llm")
+    private val llmFile get() = File(llmDir, "model.gguf")
+    private val answerLock = Mutex()
+    private var unloadJob: Job? = null
+
+    /** File name of the imported answer model, or null if none is installed. */
+    var answerModel by mutableStateOf(prefs.getString("answer_model", null)?.takeIf { llmFile.exists() })
+        private set
+    /** "Copying 40%" while a model file is imported; null when idle. */
+    var importStatus by mutableStateOf<String?>(null)
+        private set
+    /** True while a question is being answered; embedding pauses so the two don't share the CPU. */
+    @Volatile var answering = false
+        private set
+
+    val totalRamBytes: Long = run {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.totalMem
+    }
+    val answersSupported: Boolean get() = totalRamBytes >= ANSWER_RAM_FLOOR
+    val answersReady: Boolean get() = answersSupported && answerModel != null
+
     val sourceList: List<SourceInfo> get() = if (sampleMode) DEMO_SOURCES else PHONE_SOURCES
     val anyGranted: Boolean get() = sources.any { it.granted }
 
@@ -111,9 +152,30 @@ class AppState(private val context: Context, private val engine: Engine) {
      * user's own.
      */
     suspend fun migrate() {
+        // Usage events ML Kit stored before its upload backend was removed (manifest).
+        withContext(Dispatchers.IO) { context.deleteDatabase("com.google.android.datatransport.events") }
         if (prefs.contains("sample_mode")) return
         withContext(Dispatchers.IO) { engine.deleteEverything() }
         prefs.edit().putBoolean("sample_mode", false).apply()
+    }
+
+    /** Copy assets/models/<name>/ to app storage once per install or update. */
+    private fun copyAssetDir(name: String): File {
+        val dir = File(context.filesDir, "models/$name")
+        val stamp = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime.toString()
+        val marker = File(dir, ".copied")
+        if (!marker.exists() || marker.readText() != stamp) {
+            dir.mkdirs()
+            val files = context.assets.list("models/$name").orEmpty()
+            if (files.isEmpty()) error("this build is missing models/$name")
+            for (f in files) {
+                context.assets.open("models/$name/$f").use { input ->
+                    File(dir, f).outputStream().use { input.copyTo(it, 1 shl 20) }
+                }
+            }
+            marker.writeText(stamp)
+        }
+        return dir
     }
 
     /**
@@ -122,20 +184,7 @@ class AppState(private val context: Context, private val engine: Engine) {
      */
     suspend fun loadModel(): String? = withContext(Dispatchers.IO) {
         try {
-            val dir = File(context.filesDir, "models/$MODEL_NAME")
-            val stamp = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime.toString()
-            val marker = File(dir, ".copied")
-            if (!marker.exists() || marker.readText() != stamp) {
-                dir.mkdirs()
-                val files = context.assets.list("models/$MODEL_NAME").orEmpty()
-                if (files.isEmpty()) error("this build has no embedding model")
-                for (f in files) {
-                    context.assets.open("models/$MODEL_NAME/$f").use { input ->
-                        File(dir, f).outputStream().use { input.copyTo(it, 1 shl 20) }
-                    }
-                }
-                marker.writeText(stamp)
-            }
+            val dir = copyAssetDir(MODEL_NAME)
             modelId = engine.loadEmbedder(dir.path)
             embedInBackground()
             null
@@ -143,6 +192,128 @@ class AppState(private val context: Context, private val engine: Engine) {
             "Meaning search is unavailable: ${e.message}"
         }
     }
+
+    private fun tokenizerPath(): String = File(copyAssetDir(ANSWER_TOKENIZER), "tokenizer.json").path
+
+    /**
+     * Copy a user-chosen GGUF file into app storage, check that the core can
+     * load it, and keep it. Returns a message to show.
+     */
+    suspend fun importAnswerModel(uri: Uri): String = withContext(Dispatchers.IO) {
+        val tmp = File(llmDir, "import.tmp")
+        try {
+            llmDir.mkdirs()
+            var name = "model.gguf"
+            var size = -1L
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    name = c.getString(0) ?: name
+                    if (!c.isNull(1)) size = c.getLong(1)
+                }
+            }
+            if (!name.endsWith(".gguf", ignoreCase = true)) error("$name is not a .gguf model file")
+            if (size > 0 && llmDir.usableSpace < size + 300_000_000L) error("not enough free space (needs ${gb(size)})")
+            answerLock.withLock {
+                engine.unloadGenerator()
+                importStatus = "Copying $name…"
+                val input = context.contentResolver.openInputStream(uri) ?: error("can't open $name")
+                input.use { inp ->
+                    tmp.outputStream().use { out ->
+                        val buf = ByteArray(1 shl 20)
+                        var copied = 0L
+                        while (true) {
+                            val n = inp.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            copied += n
+                            if (size > 0) importStatus = "Copying $name: ${copied * 100 / size}%"
+                        }
+                    }
+                }
+                val magic = ByteArray(4)
+                tmp.inputStream().use { it.read(magic) }
+                if (String(magic, Charsets.US_ASCII) != "GGUF") error("$name is not a GGUF file")
+                importStatus = "Checking the model…"
+                engine.loadGenerator(tmp.path, tokenizerPath())
+                llmFile.delete()
+                if (!tmp.renameTo(llmFile)) error("couldn't save the model")
+                prefs.edit().putString("answer_model", name).apply()
+                answerModel = name
+            }
+            scheduleUnload()
+            "Answers are on: $name"
+        } catch (e: Exception) {
+            tmp.delete()
+            "Couldn't import the model: ${e.message}"
+        } finally {
+            importStatus = null
+        }
+    }
+
+    /** Import outside any screen's scope, so leaving the screen doesn't cancel a 1 GB copy. */
+    fun startImport(uri: Uri, done: (String) -> Unit) {
+        background.launch {
+            val msg = importAnswerModel(uri)
+            withContext(Dispatchers.Main) { done(msg) }
+        }
+    }
+
+    suspend fun removeAnswerModel(): String = answerLock.withLock {
+        withContext(Dispatchers.IO) {
+            engine.unloadGenerator()
+            llmFile.delete()
+        }
+        prefs.edit().remove("answer_model").apply()
+        answerModel = null
+        "Answer model removed."
+    }
+
+    /**
+     * Answer a question with citations. Loads the model on first use and frees
+     * it after 5 idle minutes (T5). [onDelta] gets the answer as it is written;
+     * cancelling the calling coroutine stops generation at the next token.
+     */
+    suspend fun ask(question: String, onStatus: (String) -> Unit, onDelta: (String) -> Unit): Answer =
+        answerLock.withLock {
+            withContext(Dispatchers.IO) {
+                unloadJob?.cancel()
+                answering = true
+                try {
+                    if (!engine.generatorLoaded()) {
+                        onStatus("Loading the answer model…")
+                        engine.loadGenerator(llmFile.path, tokenizerPath())
+                    }
+                    onStatus("Reading your data…")
+                    val job = currentCoroutineContext()[Job]
+                    val offsetMin = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000
+                    engine.answer(question, offsetMin, object : AnswerListener {
+                        override fun onText(text: String): Boolean {
+                            if (job?.isActive != true) return false
+                            onDelta(text)
+                            return true
+                        }
+                    })
+                } finally {
+                    answering = false
+                    scheduleUnload()
+                }
+            }
+        }
+
+    private fun scheduleUnload() {
+        unloadJob?.cancel()
+        unloadJob = background.launch {
+            delay(IDLE_UNLOAD_MS)
+            answerLock.withLock { engine.unloadGenerator() }
+        }
+    }
+
+    /** Peak resident memory of this process, for the answer timing line. */
+    fun peakMemoryMb(): Long? = runCatching {
+        File("/proc/self/status").readLines()
+            .first { it.startsWith("VmHWM:") }
+            .split(Regex("\\s+"))[1].toLong() / 1024
+    }.getOrNull()
 
     /** Embed every chunk that has no vector yet, a batch at a time, off the main thread. */
     fun embedInBackground() {
@@ -152,6 +323,7 @@ class AppState(private val context: Context, private val engine: Engine) {
                 var total = engine.embeddingBacklog()
                 var done = 0L
                 while (total > 0) {
+                    while (answering) delay(250) // the answer gets the CPU
                     embedStatus = "Understanding meaning: $done / $total"
                     val n = engine.embedNext(EMBED_BATCH)
                     if (n == 0L) break

@@ -4,13 +4,16 @@
 //! platforms (T6). Swift and Kotlin shells only read sources and render.
 //!
 //! Pipeline: [`record::Record`] -> [`chunk::chunk_record`] -> [`store::Store`]
-//! (items, chunks, embeddings, FTS5, sources) -> [`retrieve::hybrid_search`].
+//! (items, chunks, embeddings, FTS5, sources) -> [`retrieve::hybrid_search`]
+//! -> [`generate`] (cited answer from an on-device model).
 
 pub mod bert;
 pub mod chunk;
 pub mod embed;
 pub mod engine;
 pub mod error;
+pub mod generate;
+pub mod qwen;
 pub mod record;
 pub mod retrieve;
 pub mod store;

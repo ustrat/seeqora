@@ -33,7 +33,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.CircularProgressIndicator
+import uniffi.seeqora_core.Answer
+import uniffi.seeqora_core.AnswerStats
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -85,14 +90,50 @@ private val SUGGESTIONS = listOf(
     "dentist",
 )
 
+/** One question and its answer as it is written. */
+private class AnswerUi(val question: String) {
+    var status by mutableStateOf<String?>(null)
+    var streamed by mutableStateOf("")
+    var answer by mutableStateOf<Answer?>(null)
+    var error by mutableStateOf<String?>(null)
+    var peakMb by mutableStateOf<Long?>(null)
+}
+
 @Composable
 fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     var results by remember { mutableStateOf<SearchResults?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var open by remember { mutableStateOf<SearchHit?>(null) }
+    var asked by remember { mutableStateOf<AnswerUi?>(null) }
     val focus = LocalFocusManager.current
     val ctx = LocalContext.current
+
+    fun ask() {
+        val q = query.trim()
+        if (!state.answersReady || q.isEmpty()) return
+        focus.clearFocus()
+        if (asked?.question != q || asked?.error != null) asked = AnswerUi(q)
+    }
+
+    // Changing the question cancels the answer (the core stops at the next token).
+    LaunchedEffect(asked) {
+        val ui = asked ?: return@LaunchedEffect
+        if (ui.answer != null) return@LaunchedEffect
+        try {
+            val a = state.ask(
+                ui.question,
+                onStatus = { ui.status = it },
+                onDelta = { ui.status = null; ui.streamed += it },
+            )
+            ui.peakMb = state.peakMemoryMb()
+            ui.answer = a
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            ui.error = e.message ?: e.toString()
+        }
+    }
 
     LaunchedEffect(query, state.version) {
         if (query.isBlank()) {
@@ -131,13 +172,29 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
         }
         OutlinedTextField(
             value = query,
-            onValueChange = { query = it },
-            placeholder = { Text("Search messages, notes, files", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            onValueChange = {
+                query = it
+                if (asked != null && it.trim() != asked?.question) asked = null
+            },
+            placeholder = {
+                Text(
+                    if (state.answersReady) "Search, or ask a question" else "Search messages, notes, files",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
             trailingIcon = {
-                if (query.isNotEmpty()) {
-                    IconButton(onClick = { query = "" }) {
-                        Icon(Icons.Filled.Clear, contentDescription = "Clear search")
+                Row {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { query = ""; asked = null }) {
+                            Icon(Icons.Filled.Clear, contentDescription = "Clear search")
+                        }
+                    }
+                    if (state.answersReady && query.isNotBlank()) {
+                        IconButton(onClick = { ask() }) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Ask", tint = Brand.Sky)
+                        }
                     }
                 }
             },
@@ -151,7 +208,7 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
                 focusedLeadingIconColor = Brand.Sky,
             ),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
+            keyboardActions = KeyboardActions(onSearch = { if (state.answersReady) ask() else focus.clearFocus() }),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
         )
 
@@ -164,13 +221,21 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
             !state.anyGranted -> NoSources(onChooseSources)
             query.isBlank() && state.sampleMode -> Suggestions(onPick = { query = it; focus.clearFocus() })
             query.isBlank() -> Text(
-                "Try a name, a place, or a few words you remember from a message, note, event or photo.",
+                if (state.answersReady) "Type a few words to search, or a question and press the arrow for a written answer with sources."
+                else "Try a name, a place, or a few words you remember from a message, note, event or photo.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp),
             )
             error != null -> Notice("Search failed: $error")
-            else -> results?.let { r -> Results(r, query, onOpen = { open = it }) }
+            else -> results?.let { r ->
+                Results(
+                    r,
+                    query,
+                    onOpen = { open = it },
+                    answer = asked,
+                )
+            }
         }
     }
 
@@ -192,14 +257,117 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
     }
 }
 
+/** The written answer: streamed text, then citation chips that open the passage (T2). */
 @Composable
-private fun Results(r: SearchResults, query: String, onOpen: (SearchHit) -> Unit) {
+private fun AnswerCard(ui: AnswerUi, onOpen: (SearchHit) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        border = BorderStroke(1.dp, Brand.Blue),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(
+                    painter = painterResource(R.drawable.seeqora_mark),
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Answer", style = MaterialTheme.typography.labelLarge, color = Brand.Sky)
+            }
+            Spacer(Modifier.height(10.dp))
+            val a = ui.answer
+            when {
+                ui.error != null -> Text(
+                    "Couldn't answer: ${ui.error}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                a == null && ui.streamed.isEmpty() -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        ui.status ?: "Thinking…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                a == null -> Text(citedText(ui.streamed), style = MaterialTheme.typography.bodyLarge)
+                a.found -> {
+                    Text(citedText(a.text), style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(10.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        a.cited.forEach { n ->
+                            val hit = a.passages.getOrNull(n.toInt() - 1) ?: return@forEach
+                            AssistChip(
+                                onClick = { onOpen(hit) },
+                                label = {
+                                    Text(
+                                        "$n · ${citationLabel(hit)} · ${formatDate(hit.timestampMs)}",
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
+                else -> Text(
+                    if (a.passages.isEmpty()) "I couldn't find that in your data."
+                    else "I couldn't find a sourced answer to that. The closest matches are below.",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+            a?.let { ans ->
+                if (ans.stats.promptTokens > 0u) {
+                    Text(
+                        timingLine(ans.stats, ui.peakMb),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Citation numbers like [2] in brand blue, so they read as links to the chips below. */
+private fun citedText(text: String): AnnotatedString = buildAnnotatedString {
+    append(text)
+    Regex("\\[[0-9, ]+\\]").findAll(text).forEach { m ->
+        addStyle(SpanStyle(color = Brand.Sky, fontWeight = FontWeight.SemiBold), m.range.first, m.range.last + 1)
+    }
+}
+
+/** Speed and memory, shown in this test build so they can be read off the phone. */
+private fun timingLine(s: AnswerStats, peakMb: Long?): String {
+    val prefill = s.prefillMs.toDouble() / 1000
+    val tps = if (s.decodeMs > 0uL) s.generatedTokens.toDouble() * 1000 / s.decodeMs.toDouble() else 0.0
+    return buildString {
+        append(s.modelId)
+        append(" · search ${s.retrieveMs} ms")
+        append(" · read ${s.promptTokens} tokens in ${"%.1f".format(prefill)} s")
+        append(" · wrote ${s.generatedTokens} at ${"%.1f".format(tps)}/s")
+        peakMb?.let { append(" · peak memory $it MB") }
+        if (s.stopped) append(" · stopped")
+    }
+}
+
+@Composable
+private fun Results(
+    r: SearchResults,
+    query: String,
+    onOpen: (SearchHit) -> Unit,
+    answer: AnswerUi? = null,
+) {
     val stems = remember(query) { queryStems(query) }
     val mark = MaterialTheme.colorScheme.primaryContainer
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        answer?.let { ui -> item(key = "answer") { AnswerCard(ui, onOpen) } }
         // Reduced mode is always visible, never silent (T9).
         r.degraded?.let { msg -> item { Notice(msg, Modifier) } }
         item {
