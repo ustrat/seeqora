@@ -146,7 +146,12 @@ fn fts_query(q: &str) -> Option<String> {
 
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Self::init(Connection::open(path)?)
+        let conn = Connection::open(path)?;
+        // WAL + NORMAL: one fsync per checkpoint instead of per item, so
+        // indexing thousands of messages doesn't hammer flash (T5).
+        let _mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        Self::init(conn)
     }
 
     pub fn open_in_memory() -> Result<Self> {
@@ -441,6 +446,50 @@ impl Store {
                     metadata,
                 })
             }))
+    }
+
+    /// Ids of indexed items for one source.
+    pub fn item_ids(&self, source: SourceKind) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT item_id FROM items WHERE source = ?1 ORDER BY item_id")?;
+        let rows = stmt.query_map(params![source.as_str()], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// After a full read of a source, drop items that no longer exist on the
+    /// device (deleted messages, removed files). Returns how many were removed.
+    pub fn retain_items(&mut self, source: SourceKind, keep: &[String]) -> Result<usize> {
+        let keep: std::collections::HashSet<&str> = keep.iter().map(String::as_str).collect();
+        let gone: Vec<String> = self
+            .item_ids(source)?
+            .into_iter()
+            .filter(|id| !keep.contains(id.as_str()))
+            .collect();
+        let s = source.as_str();
+        let tx = self.conn.transaction()?;
+        for id in &gone {
+            tx.execute(
+                "DELETE FROM chunks_fts WHERE chunk_id IN
+                   (SELECT chunk_id FROM chunks WHERE source = ?1 AND item_id = ?2)",
+                params![s, id],
+            )?;
+            tx.execute(
+                "DELETE FROM embeddings WHERE chunk_id IN
+                   (SELECT chunk_id FROM chunks WHERE source = ?1 AND item_id = ?2)",
+                params![s, id],
+            )?;
+            tx.execute(
+                "DELETE FROM chunks WHERE source = ?1 AND item_id = ?2",
+                params![s, id],
+            )?;
+            tx.execute(
+                "DELETE FROM items WHERE source = ?1 AND item_id = ?2",
+                params![s, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(gone.len())
     }
 
     /// Indexed items for one source (shown next to its consent toggle).

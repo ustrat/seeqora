@@ -71,6 +71,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // On-device OCR for the Photos source; bundled model, no network or Play Services download.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
     // Required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
 }

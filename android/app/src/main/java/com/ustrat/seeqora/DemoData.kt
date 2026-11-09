@@ -49,6 +49,16 @@ val DEMO_SOURCES = listOf(
     SourceInfo(SourceKind.PHOTOS, "Photos", "Reads text found in screenshots and photos, like receipts and tickets."),
 )
 
+/** This phone's sources, in the order the consent screen lists them. */
+val PHONE_SOURCES = listOf(
+    SourceInfo(SourceKind.MESSAGES, "Messages", "Reads your text messages (SMS) and who sent them. Names come from Contacts only if Contacts is on."),
+    SourceInfo(SourceKind.CONTACTS, "Contacts", "Reads names, numbers, emails and notes, so results can say who someone is."),
+    SourceInfo(SourceKind.CALENDAR, "Calendar", "Reads events from the past year and the next six months: titles, times and places."),
+    SourceInfo(SourceKind.PHOTOS, "Photos", "Finds text in your ${com.ustrat.seeqora.adapters.PhotosAdapter.MAX_PHOTOS} newest photos and screenshots, like receipts and tickets. The text reading runs on this phone."),
+    SourceInfo(SourceKind.FILES, "Files & notes", "Reads text and Markdown files (.txt, .md) in one folder you choose."),
+)
+
 fun sourceName(kind: SourceKind): String =
-    DEMO_SOURCES.firstOrNull { it.kind == kind }?.name
+    PHONE_SOURCES.firstOrNull { it.kind == kind }?.name
+        ?: DEMO_SOURCES.firstOrNull { it.kind == kind }?.name
         ?: kind.name.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }

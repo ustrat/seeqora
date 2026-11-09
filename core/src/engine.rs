@@ -173,6 +173,18 @@ impl Engine {
         Ok(out)
     }
 
+    /// Item ids already indexed for a source, so adapters can skip costly
+    /// re-extraction (photo OCR) of items the core already has (T5).
+    pub fn indexed_ids(&self, source: SourceKind) -> FfiResult<Vec<String>> {
+        Ok(self.store().item_ids(source)?)
+    }
+
+    /// After a full read of a source, remove items that are gone from the
+    /// device. Returns how many were removed.
+    pub fn retain_only(&self, source: SourceKind, item_ids: Vec<String>) -> FfiResult<i64> {
+        Ok(self.store().retain_items(source, &item_ids)? as i64)
+    }
+
     /// Search switched-on sources. Revoked sources have no rows left, so they
     /// can never appear.
     pub fn search(&self, query: String, top_n: u32) -> FfiResult<SearchResults> {
@@ -240,6 +252,11 @@ mod tests {
         let m = status.iter().find(|s| s.source == SourceKind::Messages).unwrap();
         assert!(m.granted);
         assert_eq!(m.items, 1);
+
+        e.index(vec![rec(SourceKind::Messages, "m2", "dinner at eight")]).unwrap();
+        assert_eq!(e.indexed_ids(SourceKind::Messages).unwrap(), vec!["m1", "m2"]);
+        assert_eq!(e.retain_only(SourceKind::Messages, vec!["m1".into()]).unwrap(), 1);
+        assert!(e.search("dinner".into(), 10).unwrap().hits.is_empty());
 
         assert_eq!(e.revoke(SourceKind::Messages).unwrap().items, 1);
         assert!(e.search("wifi".into(), 10).unwrap().hits.is_empty());
