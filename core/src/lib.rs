@@ -8,6 +8,7 @@
 
 pub mod chunk;
 pub mod embed;
+pub mod engine;
 pub mod error;
 pub mod record;
 pub mod retrieve;

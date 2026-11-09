@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand, taken from seeqora_logo.png: black field, sky-to-electric blue dots. -->
+    <color name="seeqora_black">#FF000000</color>
+    <color name="seeqora_blue">#FF1E6BFF</color>
+    <color name="seeqora_sky">#FF3DB4FF</color>
+</resources>

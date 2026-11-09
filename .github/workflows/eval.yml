@@ -1,0 +1,44 @@
+name: eval
+
+# Golden-set retrieval evaluation (T10). Metrics are written to the run's
+# summary page. A drop of more than 2 points against the committed baseline
+# fails the build. The recall gate itself is enforced from Gate 0 onward.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  golden:
+    name: golden set
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p seeqora-eval --release
+      - name: Retrieval (no filters)
+        run: |
+          set -o pipefail
+          BASE=""
+          [ -f eval/golden/baseline.json ] && BASE="--baseline eval/golden/baseline.json"
+          ./target/release/seeqora-eval --golden eval/golden --json eval-results.json $BASE \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Retrieval (oracle filters)
+        run: |
+          set -o pipefail
+          BASE=""
+          [ -f eval/golden/baseline-oracle.json ] && BASE="--baseline eval/golden/baseline-oracle.json"
+          ./target/release/seeqora-eval --golden eval/golden --oracle-filters --json eval-results-oracle.json $BASE \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Retrieval (keyword only, informational)
+        run: |
+          set -o pipefail
+          ./target/release/seeqora-eval --golden eval/golden --keyword-only --json eval-results-keyword.json \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: eval-results*.json

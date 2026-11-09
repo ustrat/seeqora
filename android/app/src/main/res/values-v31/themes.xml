@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ system splash: the logo mark on black. -->
+    <style name="Theme.Seeqora" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/seeqora_black</item>
+        <item name="android:colorAccent">@color/seeqora_blue</item>
+        <item name="android:windowSplashScreenBackground">@color/seeqora_black</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+    </style>
+</resources>

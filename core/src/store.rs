@@ -10,7 +10,7 @@ use crate::embed::cosine;
 use crate::error::{CoreError, Result};
 use crate::record::{Record, SourceKind};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,10 +54,11 @@ CREATE TABLE IF NOT EXISTS embeddings (
     vector    BLOB NOT NULL
 );
 
+-- Porter stemming so "changed" matches "change" and "plants" matches "Planting".
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     text,
     chunk_id UNINDEXED,
-    tokenize = 'unicode61 remove_diacritics 2'
+    tokenize = 'porter unicode61 remove_diacritics 2'
 );
 "#;
 
@@ -104,6 +105,8 @@ pub struct StoredChunk {
     pub text: String,
     pub uri: String,
     pub timestamp_ms: i64,
+    /// Item metadata (sender, title, filename...) for the citation label.
+    pub metadata: BTreeMap<String, String>,
 }
 
 pub struct Store {
@@ -127,12 +130,25 @@ fn blob_to_vec(b: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// Turn free text into a safe FTS5 OR-query of quoted terms.
+/// Turn free text into a safe FTS5 OR-query of quoted terms. The last term is
+/// also a prefix match, so search-as-you-type finds "wifi" while "wif" is typed.
 fn fts_query(q: &str) -> Option<String> {
-    let terms: Vec<String> = q
+    let words: Vec<String> = q
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
-        .map(|t| format!("\"{}\"", t.to_lowercase()))
+        .map(|t| t.to_lowercase())
+        .collect();
+    let last = words.len().saturating_sub(1);
+    let terms: Vec<String> = words
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            if i == last && t.chars().count() >= 2 {
+                format!("\"{t}\" OR \"{t}\"*")
+            } else {
+                format!("\"{t}\"")
+            }
+        })
         .collect();
     if terms.is_empty() {
         None
@@ -143,7 +159,12 @@ fn fts_query(q: &str) -> Option<String> {
 
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Self::init(Connection::open(path)?)
+        let conn = Connection::open(path)?;
+        // WAL + NORMAL: one fsync per checkpoint instead of per item, so
+        // indexing thousands of messages doesn't hammer flash (T5).
+        let _mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        Self::init(conn)
     }
 
     pub fn open_in_memory() -> Result<Self> {
@@ -406,7 +427,7 @@ impl Store {
         Ok(self
             .conn
             .query_row(
-                "SELECT c.chunk_id, c.source, c.item_id, c.text, i.uri, i.timestamp_ms
+                "SELECT c.chunk_id, c.source, c.item_id, c.text, i.uri, i.timestamp_ms, i.metadata
                  FROM chunks c JOIN items i ON i.source = c.source AND i.item_id = c.item_id
                  WHERE c.chunk_id = ?1",
                 params![chunk_id],
@@ -418,11 +439,16 @@ impl Store {
                         r.get::<_, String>(3)?,
                         r.get::<_, String>(4)?,
                         r.get::<_, i64>(5)?,
+                        r.get::<_, String>(6)?,
                     ))
                 },
             )
             .optional()?
-            .and_then(|(chunk_id, src, item_id, text, uri, timestamp_ms)| {
+            .and_then(|(chunk_id, src, item_id, text, uri, timestamp_ms, meta)| {
+                // Metadata is written by upsert_record; unreadable metadata only
+                // costs the label, never the result (T9).
+                let metadata: BTreeMap<String, String> =
+                    serde_json::from_str(&meta).unwrap_or_default();
                 SourceKind::parse(&src).map(|source| StoredChunk {
                     chunk_id,
                     source,
@@ -430,8 +456,62 @@ impl Store {
                     text,
                     uri,
                     timestamp_ms,
+                    metadata,
                 })
             }))
+    }
+
+    /// Ids of indexed items for one source.
+    pub fn item_ids(&self, source: SourceKind) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT item_id FROM items WHERE source = ?1 ORDER BY item_id")?;
+        let rows = stmt.query_map(params![source.as_str()], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// After a full read of a source, drop items that no longer exist on the
+    /// device (deleted messages, removed files). Returns how many were removed.
+    pub fn retain_items(&mut self, source: SourceKind, keep: &[String]) -> Result<usize> {
+        let keep: std::collections::HashSet<&str> = keep.iter().map(String::as_str).collect();
+        let gone: Vec<String> = self
+            .item_ids(source)?
+            .into_iter()
+            .filter(|id| !keep.contains(id.as_str()))
+            .collect();
+        let s = source.as_str();
+        let tx = self.conn.transaction()?;
+        for id in &gone {
+            tx.execute(
+                "DELETE FROM chunks_fts WHERE chunk_id IN
+                   (SELECT chunk_id FROM chunks WHERE source = ?1 AND item_id = ?2)",
+                params![s, id],
+            )?;
+            tx.execute(
+                "DELETE FROM embeddings WHERE chunk_id IN
+                   (SELECT chunk_id FROM chunks WHERE source = ?1 AND item_id = ?2)",
+                params![s, id],
+            )?;
+            tx.execute(
+                "DELETE FROM chunks WHERE source = ?1 AND item_id = ?2",
+                params![s, id],
+            )?;
+            tx.execute(
+                "DELETE FROM items WHERE source = ?1 AND item_id = ?2",
+                params![s, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(gone.len())
+    }
+
+    /// Indexed items for one source (shown next to its consent toggle).
+    pub fn count_items(&self, source: SourceKind) -> Result<usize> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM items WHERE source = ?1",
+            params![source.as_str()],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
     }
 
     pub fn count_chunks(&self) -> Result<usize> {

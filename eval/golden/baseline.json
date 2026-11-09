@@ -1,0 +1,11 @@
+{
+  "answerable": 45,
+  "chunks": 101,
+  "coverage_at_10": 0.6865671641791045,
+  "embedder": "test-hash@0.0.0",
+  "items": 64,
+  "mode": "no filters",
+  "negative": 5,
+  "recall_at_10": 0.8,
+  "recall_at_3": 0.6222222222222222
+}
