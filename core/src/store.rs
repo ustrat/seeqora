@@ -130,12 +130,25 @@ fn blob_to_vec(b: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// Turn free text into a safe FTS5 OR-query of quoted terms.
+/// Turn free text into a safe FTS5 OR-query of quoted terms. The last term is
+/// also a prefix match, so search-as-you-type finds "wifi" while "wif" is typed.
 fn fts_query(q: &str) -> Option<String> {
-    let terms: Vec<String> = q
+    let words: Vec<String> = q
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
-        .map(|t| format!("\"{}\"", t.to_lowercase()))
+        .map(|t| t.to_lowercase())
+        .collect();
+    let last = words.len().saturating_sub(1);
+    let terms: Vec<String> = words
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            if i == last && t.chars().count() >= 2 {
+                format!("\"{t}\" OR \"{t}\"*")
+            } else {
+                format!("\"{t}\"")
+            }
+        })
         .collect();
     if terms.is_empty() {
         None

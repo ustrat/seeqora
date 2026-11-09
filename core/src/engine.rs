@@ -242,6 +242,9 @@ mod tests {
         assert_eq!(e.index(vec![wifi.clone()]).unwrap().indexed, 1);
         assert_eq!(e.index(vec![wifi]).unwrap().unchanged, 1);
 
+        // Prefix match on the last word while typing.
+        assert_eq!(e.search("cabin wif".into(), 10).unwrap().hits[0].item_id, "m1");
+
         let r = e.search("wifi password".into(), 10).unwrap();
         assert!(r.degraded.is_some(), "keyword-only must be announced");
         assert_eq!(r.hits[0].item_id, "m1");

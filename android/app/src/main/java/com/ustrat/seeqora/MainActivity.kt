@@ -77,6 +77,7 @@ fun App(state: AppState) {
         }
     }
     LaunchedEffect(Unit) {
+        state.migrate()
         state.refresh()
         // First run: nothing is switched on, so start on the consent screen.
         if (tab == TAB_UNSET) tab = if (state.anyGranted) TAB_SEARCH else TAB_SOURCES

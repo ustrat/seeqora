@@ -88,6 +88,17 @@ class AppState(private val context: Context, private val engine: Engine) {
         }
     }
 
+    /**
+     * Builds before real data shipped only held sample data, and never wrote
+     * "sample_mode". Clear that index once so sample items never mix with the
+     * user's own.
+     */
+    suspend fun migrate() {
+        if (prefs.contains("sample_mode")) return
+        withContext(Dispatchers.IO) { engine.deleteEverything() }
+        prefs.edit().putBoolean("sample_mode", false).apply()
+    }
+
     suspend fun refresh() {
         sources = withContext(Dispatchers.IO) { engine.sources() }
         loaded = true
