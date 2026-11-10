@@ -19,6 +19,7 @@ pub mod qwen;
 pub mod record;
 pub mod retrieve;
 pub mod store;
+pub mod when;
 
 pub use error::{CoreError, Result};
 
