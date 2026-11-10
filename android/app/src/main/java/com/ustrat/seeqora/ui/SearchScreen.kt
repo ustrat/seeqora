@@ -93,7 +93,8 @@ private val SUGGESTIONS = listOf(
 
 /** One question and its answer as it is written. */
 private class AnswerUi(val question: String) {
-    var status by mutableStateOf<String?>(null)
+    // Shown while the model is still being warmed by prepareAnswers().
+    var status by mutableStateOf<String?>("Getting the answer model ready…")
     var streamed by mutableStateOf("")
     var answer by mutableStateOf<Answer?>(null)
     var error by mutableStateOf<String?>(null)
@@ -178,6 +179,8 @@ fun SearchScreen(state: AppState, onChooseSources: () -> Unit) {
             onValueChange = {
                 query = it
                 if (asked != null && it.trim() != asked?.question) asked = null
+                // Typing may end in a question: warm the model now (no-op if loaded).
+                if (it.isNotBlank()) state.prepareAnswers()
             },
             placeholder = {
                 Text(

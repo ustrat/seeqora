@@ -25,3 +25,9 @@ candle-core = "0.11"
 candle-nn = "0.11"
 candle-transformers = "0.11"
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
+
+# Answer generation on Android: llama.cpp, built from source for the NDK
+# target with the C++ runtime linked statically (no libc++_shared.so to ship).
+# The arm64 CPU flags come from GGML_CPU_ARM_ARCH in scripts/build-android.sh.
+[target.'cfg(target_os = "android")'.dependencies]
+llama-cpp-2 = { version = "=0.1.161", default-features = false, features = ["android-static-stdcxx"] }
