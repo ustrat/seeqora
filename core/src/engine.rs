@@ -13,6 +13,7 @@ use crate::generate::{
     attribute, build_prompt, check_citations, says_not_found, Generator, PromptPassage,
     ANSWER_PASSAGES, MAX_NEW_TOKENS, NOT_FOUND,
 };
+#[cfg(not(target_os = "android"))]
 use crate::qwen::QwenGenerator;
 use crate::record::{Record, SourceKind};
 use crate::retrieve::hybrid_search;
@@ -321,13 +322,18 @@ impl Engine {
     /// Load the answer model: a Qwen2.5 Instruct GGUF file plus the Qwen2.5
     /// `tokenizer.json` the shell ships. Returns the model name. Replaces any
     /// model already loaded.
+    ///
+    /// Android runs llama.cpp, which reads the tokenizer from the GGUF and
+    /// ignores `tokenizer_path`; other targets still use candle.
     pub fn load_generator(&self, model_path: String, tokenizer_path: String) -> FfiResult<String> {
-        let g = QwenGenerator::load(
+        // Free the old model first so two are never in memory at once.
+        *self.generator() = None;
+        let g: Box<dyn Generator> = load_answer_model(
             std::path::Path::new(&model_path),
             std::path::Path::new(&tokenizer_path),
         )?;
         let id = g.model_id().to_string();
-        *self.generator() = Some(Box::new(g));
+        *self.generator() = Some(g);
         Ok(id)
     }
 
@@ -438,12 +444,28 @@ impl Engine {
 /// barrier after every matrix multiply, so one slow little core holds back
 /// all of them. Runs once, before any model loads; an explicit
 /// CANDLE_NUM_THREADS / RAYON_NUM_THREADS in the environment wins.
+#[cfg(target_os = "android")]
+fn load_answer_model(model: &std::path::Path, _tokenizer: &std::path::Path) -> Result<Box<dyn Generator>, CoreError> {
+    Ok(Box::new(crate::llama::LlamaGenerator::load(model, answer_threads())?))
+}
+
+#[cfg(not(target_os = "android"))]
+fn load_answer_model(model: &std::path::Path, tokenizer: &std::path::Path) -> Result<Box<dyn Generator>, CoreError> {
+    Ok(Box::new(QwenGenerator::load(model, tokenizer)?))
+}
+
+/// Threads for model work: the performance cores. Spreading a matmul over the
+/// little cores makes every step wait for the slowest one.
+fn answer_threads() -> usize {
+    performance_cores().unwrap_or_else(|| {
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+    })
+}
+
 fn configure_threads() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        let n = performance_cores().unwrap_or_else(|| {
-            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
-        });
+        let n = answer_threads();
         for var in ["CANDLE_NUM_THREADS", "RAYON_NUM_THREADS"] {
             if std::env::var_os(var).is_none() {
                 std::env::set_var(var, n.to_string());
@@ -470,10 +492,9 @@ fn performance_cores() -> Option<usize> {
 /// How the core was built and how it runs, for the answer timing line.
 #[uniffi::export]
 pub fn engine_info() -> String {
-    configure_threads();
-    let threads = std::env::var("CANDLE_NUM_THREADS").unwrap_or_else(|_| "?".into());
+    let runtime = if cfg!(target_os = "android") { "llama.cpp" } else { "candle" };
     let dotprod = if cfg!(target_feature = "dotprod") { "on" } else { "off" };
-    format!("{threads} threads, dotprod {dotprod}")
+    format!("{runtime}, {} threads, dotprod {dotprod}", answer_threads())
 }
 
 /// Who or what a passage came from, as the model sees it.

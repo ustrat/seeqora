@@ -16,6 +16,13 @@ echo "==> Rust targets"
 rustup target add aarch64-linux-android x86_64-linux-android
 command -v cargo-ndk >/dev/null 2>&1 || cargo install cargo-ndk --locked
 
+# llama.cpp (answers): build its arm64 kernels for ARMv8.2 int8 dot product
+# and the int8 matrix-multiply extension, which do most of the prompt-reading
+# work. The app checks /proc/cpuinfo for both before loading the core.
+export GGML_CPU_ARM_ARCH="armv8.2-a+dotprod+i8mm"
+export ANDROID_NDK="$ANDROID_NDK_HOME"
+export ANDROID_PLATFORM="${ANDROID_PLATFORM:-android-29}"  # app minSdk
+
 echo "==> Build core .so (arm64-v8a, x86_64)"
 cargo ndk -t arm64-v8a -t x86_64 -o android/app/src/main/jniLibs \
   build -p seeqora-core --release --lib

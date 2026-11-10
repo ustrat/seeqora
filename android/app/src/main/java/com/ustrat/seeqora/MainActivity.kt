@@ -50,10 +50,10 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
-        // The arm64 core is built with ARMv8.2 dotprod; on an older CPU loading
-        // it would crash, so refuse plainly before the first core call (T9).
+        // The arm64 core is built with ARMv8.2 dotprod and i8mm; on an older CPU
+        // loading it would crash, so refuse plainly before the first core call (T9).
         val opened = if (!cpuSupported()) {
-            Result.failure<Engine>(IllegalStateException("This test build needs a newer processor (ARMv8.2 dot-product instructions)."))
+            Result.failure<Engine>(IllegalStateException("This test build needs a newer processor (ARM int8 dot-product and matrix instructions)."))
         } else {
             runCatching { CoreHolder.get(applicationContext) }
         }
@@ -70,13 +70,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** arm64 phones must report the dot-product extension; x86_64 (emulator) builds don't use it. */
+/** arm64 phones must report dot product and int8 matmul; x86_64 (emulator) builds don't use them. */
 private fun cpuSupported(): Boolean {
     if (Build.SUPPORTED_ABIS.firstOrNull() != "arm64-v8a") return true
     return runCatching {
         File("/proc/cpuinfo").readLines()
             .filter { it.startsWith("Features") }
-            .all { "asimddp" in it.split(Regex("\\s+")) }
+            .all { line -> line.split(Regex("\\s+")).let { "asimddp" in it && "i8mm" in it } }
     }.getOrDefault(true)
 }
 
