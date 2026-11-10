@@ -46,11 +46,14 @@ fun gb(bytes: Long): String = "%.1f GB".format(bytes / 1_000_000_000.0)
 const val MODEL_NAME = "bge-small-en-v1.5"
 private const val EMBED_BATCH = 32u
 
-/** Answers: the Qwen2.5 tokenizer ships under assets/models/; the model file is imported by the user (T1). */
-private const val ANSWER_TOKENIZER = "qwen2.5"
-const val ANSWER_MODEL_NAME = "Qwen2.5 1.5B Instruct (Q4_K_M, 1.1 GB)"
+/**
+ * Answers: the user imports the model file (T1). llama.cpp reads the tokenizer
+ * from the GGUF, so nothing model-specific ships in the APK. Qwen2.5 and Qwen3
+ * GGUFs also load.
+ */
+const val ANSWER_MODEL_NAME = "Qwen3.5 2B Instruct (Q4_K_M, 1.4 GB)"
 const val ANSWER_MODEL_URL =
-    "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+    "https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen_Qwen3.5-2B-Q4_K_M.gguf"
 /** Below this, answers are off and search shows ranked passages (DECISION_LOG: RAM floor is still open). */
 private const val ANSWER_RAM_FLOOR = 5_500_000_000L
 /** Free the model's ~1.5 GB after 5 idle minutes (T5). */
@@ -194,7 +197,8 @@ class AppState(private val context: Context, private val engine: Engine) {
         }
     }
 
-    private fun tokenizerPath(): String = File(copyAssetDir(ANSWER_TOKENIZER), "tokenizer.json").path
+    /** llama.cpp reads the tokenizer from the GGUF; the core ignores this path on Android. */
+    private fun tokenizerPath(): String = ""
 
     /**
      * Copy a user-chosen GGUF file into app storage, check that the core can

@@ -53,8 +53,6 @@ jobs:
           key: embed-models-${{ hashFiles('eval/models.json') }}
       - name: Bundle embedding model
         run: bash scripts/bundle-model.sh android/app/src/main/assets/models/bge-small-en-v1.5
-      - name: Bundle answer-model tokenizer
-        run: bash scripts/bundle-answer-tokenizer.sh android/app/src/main/assets/models/qwen2.5
       - name: Sideload signing key
         env:
           KEYSTORE_B64: ${{ secrets.SEEQORA_KEYSTORE_B64 }}

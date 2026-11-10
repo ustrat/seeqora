@@ -15,6 +15,7 @@ pub mod error;
 pub mod generate;
 #[cfg(target_os = "android")]
 pub mod llama;
+#[cfg(not(target_os = "android"))]
 pub mod qwen;
 pub mod record;
 pub mod retrieve;
