@@ -234,9 +234,35 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
+/// The reasoning block a Qwen3-family model may still write; never shown.
+const THINK_OPEN: &str = "<think>";
+const THINK_CLOSE: &str = "</think>";
+
+/// The part of `text` that is the answer: everything after a leading
+/// `<think>…</think>` block, if there is one. `None` while that block is
+/// still open, or while the text so far could still become `<think>`.
+pub fn visible(text: &str) -> Option<&str> {
+    let t = text.trim_start();
+    if t.starts_with(THINK_OPEN) {
+        return t.find(THINK_CLOSE).map(|i| t[i + THINK_CLOSE.len()..].trim_start());
+    }
+    let undecided = !t.is_empty() && THINK_OPEN.starts_with(t);
+    (!undecided).then_some(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reasoning_blocks_are_hidden() {
+        assert_eq!(visible("Dinner is at 7 [1]."), Some("Dinner is at 7 [1]."));
+        assert_eq!(visible("<thi"), None);
+        assert_eq!(visible("<think>\nlet me see"), None);
+        assert_eq!(visible("<think>\nhmm\n</think>\n\nDinner [1]."), Some("Dinner [1]."));
+        assert_eq!(visible("<b>bold</b>"), Some("<b>bold</b>"));
+        assert_eq!(visible(""), Some(""));
+    }
 
     #[test]
     fn dates_are_local_and_named() {
