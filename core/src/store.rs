@@ -440,6 +440,27 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Chunks whose items match `filters` (a time window, usually), in time
+    /// order: oldest first, or newest first if `newest_first`. Used when a
+    /// question names a time but shares no words with what happened then
+    /// ("What did I do last Thursday?").
+    pub fn chunks_in_window(&self, filters: &Filters, newest_first: bool, k: usize) -> Result<Vec<String>> {
+        let dir = if newest_first { "DESC" } else { "ASC" };
+        let sql = format!(
+            "SELECT c.chunk_id
+             FROM chunks c
+             JOIN items i ON i.source = c.source AND i.item_id = c.item_id
+             WHERE (?1 IS NULL OR 1) {FILTER_SQL}
+             ORDER BY i.timestamp_ms {dir}, c.chunk_id ASC
+             LIMIT ?6"
+        );
+        let (s, from, to, sender) = Self::filter_params(filters);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let none: Option<i64> = None;
+        let rows = stmt.query_map(params![none, s, from, to, sender, k as i64], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     /// Dense cosine search (brute force in Phase 0). Best first, ties by chunk id.
     pub fn dense_search(
         &self,

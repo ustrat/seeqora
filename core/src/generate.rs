@@ -53,6 +53,12 @@ pub struct PromptPassage {
     pub label: String,
     pub timestamp_ms: i64,
     pub text: String,
+    /// Local day the item is about (see `when::event_days`): the soonest
+    /// upcoming one, else the latest mentioned. Lets the prompt mark it
+    /// past, today or upcoming.
+    pub about_day: Option<i64>,
+    /// A calendar event: its own date is the day it is about.
+    pub is_event: bool,
 }
 
 /// System and user messages for a question over numbered passages.
@@ -71,27 +77,40 @@ Rules:\n\
 - Use only facts stated in the sources. Never guess or add outside knowledge.\n\
 - After each fact, cite its source number in square brackets, like [2].\n\
 - Answer in one to three short sentences.\n\
+- Each source says whether what it is about is past, today or upcoming. \"Next\" or \"upcoming\" means today or later, never past. \
+If the question asks for the next one and no source is today or upcoming, say there is none coming up in the sources, then give the most recent past one with its date.\n\
 - If the sources do not answer the question, reply exactly: {NOT_FOUND}\n\
 \n\
 Example of the format:\n\
 Sources:\n\
-[1] Text message from Sam (Tue 2025-03-04): Booked us a table at Lucia for 7:30 Friday.\n\
-[2] Calendar event \"Gym\" (Wed 2025-03-05): Gym, Wed 6 pm.\n\
+[1] Text message from Sam (sent Tue 2025-03-04; about Fri 2025-03-07, upcoming): Booked us a table at Lucia for 7:30 Friday.\n\
+[2] Calendar event \"Gym\" (Wed 2025-03-05, upcoming): Gym, Wed 6 pm.\n\
 Question: where is dinner on Friday?\n\
 Answer: Dinner is at Lucia at 7:30 on Friday [1].",
         today = day_label(now_ms + offset_ms),
     );
+    let today = (now_ms + offset_ms).div_euclid(86_400_000);
+    let status = |day: i64| match day.cmp(&today) {
+        std::cmp::Ordering::Less => "past",
+        std::cmp::Ordering::Equal => "today",
+        std::cmp::Ordering::Greater => "upcoming",
+    };
     let mut user = String::from("Sources:\n");
     for (i, p) in passages.iter().enumerate() {
         let text: String = p.text.trim().chars().take(PASSAGE_CHARS).collect();
         let text = text.replace('\n', " ");
-        user.push_str(&format!(
-            "[{}] {} ({}): {}\n",
-            i + 1,
-            p.label,
-            day_label(p.timestamp_ms + offset_ms),
-            text
-        ));
+        let sent_day = (p.timestamp_ms + offset_ms).div_euclid(86_400_000);
+        let when = match (p.is_event, p.about_day) {
+            (true, _) => format!("{}, {}", day_label(p.timestamp_ms + offset_ms), status(sent_day)),
+            (false, Some(d)) => format!(
+                "sent {}; about {}, {}",
+                day_label(p.timestamp_ms + offset_ms),
+                day_label(d * 86_400_000),
+                status(d)
+            ),
+            (false, None) => day_label(p.timestamp_ms + offset_ms),
+        };
+        user.push_str(&format!("[{}] {} ({}): {}\n", i + 1, p.label, when, text));
     }
     user.push_str(&format!("\nQuestion: {}", question.trim()));
     (system, user)
@@ -296,16 +315,45 @@ mod tests {
     #[test]
     fn prompt_numbers_passages_and_caps_them() {
         let long = "x".repeat(PASSAGE_CHARS + 50);
-        let ps = vec![
-            PromptPassage { label: "Message from Dana".into(), timestamp_ms: 0, text: "wifi is Tamarack".into() },
-            PromptPassage { label: "Note".into(), timestamp_ms: 0, text: long },
-        ];
+        let p = |label: &str, text: String| PromptPassage {
+            label: label.into(),
+            timestamp_ms: 0,
+            text,
+            about_day: None,
+            is_event: false,
+        };
+        let ps = vec![p("Message from Dana", "wifi is Tamarack".into()), p("Note", long)];
         let (system, user) = build_prompt("what is the wifi?", &ps, 0, 0);
         assert!(system.contains(NOT_FOUND));
         assert!(system.contains("Today is Thu 1970-01-01"));
         assert!(user.contains("[1] Message from Dana (Thu 1970-01-01): wifi is Tamarack"));
         assert!(user.contains(&format!("[2] Note (Thu 1970-01-01): {}\n", "x".repeat(PASSAGE_CHARS))));
         assert!(user.ends_with("Question: what is the wifi?"));
+    }
+
+    #[test]
+    fn prompt_marks_what_is_past_and_upcoming() {
+        let day = 86_400_000_i64;
+        let now = 10 * day + 3_600_000; // Sun 1970-01-11, 01:00 UTC
+        let ps = vec![
+            PromptPassage {
+                label: "Text message from Clinic".into(),
+                timestamp_ms: 2 * day,
+                text: "Your visit on 01/05 is confirmed".into(),
+                about_day: Some(4),
+                is_event: false,
+            },
+            PromptPassage {
+                label: "Calendar event \"Dentist\"".into(),
+                timestamp_ms: 12 * day,
+                text: "Dentist".into(),
+                about_day: Some(12),
+                is_event: true,
+            },
+        ];
+        let (_, user) = build_prompt("when is my next appointment?", &ps, now, 0);
+        assert!(user.contains("[1] Text message from Clinic (sent Sat 1970-01-03; about Mon 1970-01-05, past):"));
+        assert!(user.contains("[2] Calendar event \"Dentist\" (Tue 1970-01-13, upcoming):"));
     }
 
     #[test]

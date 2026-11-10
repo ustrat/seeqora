@@ -10,9 +10,10 @@
 //! - **Coverage@10**: share of *all* expected items found in the top 10
 //!   (matters for multi-source questions).
 //!
-//! Modes: by default, questions run with no filters (query rewrite lands in W5).
-//! `--oracle-filters` applies each question's `expected_filters` to measure
-//! retrieval as if the rewrite were perfect.
+//! Modes: by default, questions run through `search_for`, the app's search,
+//! which reads time words at the question's `now` (W5). `--oracle-filters`
+//! applies each question's `expected_filters` to plain hybrid search, to
+//! measure retrieval as if the time reading were perfect.
 //!
 //! Exit code is non-zero if `--gate` is set and a bar fails, or if `--baseline`
 //! is given and any metric dropped more than 2 points.
@@ -21,7 +22,7 @@ use chrono::DateTime;
 use seeqora_core::bert::BertEmbedder;
 use seeqora_core::embed::{Embedder, HashEmbedder};
 use seeqora_core::record::{Record, SourceKind};
-use seeqora_core::retrieve::{embed_pending, hybrid_search};
+use seeqora_core::retrieve::{embed_pending, hybrid_search, search_for};
 use seeqora_core::store::{Filters, Store};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
@@ -199,15 +200,17 @@ fn evaluate(args: &Args) -> Result<(Vec<Outcome>, usize, usize, String), String>
 
     let mut out = Vec::new();
     for q in &questions {
-        ms(&q.now)?;
-        let filters = if args.oracle_filters {
-            to_filters(q.expected_filters.as_ref())?
-        } else {
-            Filters::default()
-        };
+        let now = ms(&q.now)?;
         let dense: Option<&dyn Embedder> = if args.keyword_only { None } else { Some(embedder) };
-        let r = hybrid_search(&store, dense, &q.question, &filters, 10)
-            .map_err(|e| e.to_string())?;
+        // Default: the app's own search, which reads time words (W5). Oracle:
+        // the plain hybrid search with the question's hand-written filters.
+        let r = if args.oracle_filters {
+            let filters = to_filters(q.expected_filters.as_ref())?;
+            hybrid_search(&store, dense, &q.question, &filters, 10)
+        } else {
+            search_for(&store, dense, &q.question, now, 0, 10)
+        }
+        .map_err(|e| e.to_string())?;
         let mut ranked: Vec<(SourceKind, String)> = Vec::new();
         for h in &r.hits {
             if let Some(c) = store.get_chunk(&h.chunk_id).map_err(|e| e.to_string())? {
@@ -286,7 +289,7 @@ fn main() -> ExitCode {
         ans.iter().map(|o| o.found10).sum(),
         ans.iter().map(|o| o.expected).sum(),
     );
-    let mode = if args.oracle_filters { "oracle filters" } else { "no filters" };
+    let mode = if args.oracle_filters { "oracle filters" } else { "app search, time words read" };
 
     println!("## Golden set retrieval ({mode})\n");
     println!(

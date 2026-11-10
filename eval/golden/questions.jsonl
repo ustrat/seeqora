@@ -48,3 +48,6 @@
 {"id":"q048","kind":"negative","question":"What's the wifi password at the office?","now":"2026-10-15T18:00:00Z","expected_items":[],"notes":"Distractors: cabin wifi password (m001), office wifi outage (m021)."}
 {"id":"q049","kind":"negative","question":"When is my dentist appointment in December?","now":"2026-10-15T18:00:00Z","expected_items":[]}
 {"id":"q050","kind":"negative","question":"How much did the hotel in Austin cost?","now":"2026-10-15T18:00:00Z","expected_items":[]}
+{"id":"q051","kind":"temporal","question":"When is my next appointment with Dr. Lin?","now":"2026-10-15T18:00:00Z","expected_items":[{"source":"calendar","item_id":"e009"},{"source":"messages","item_id":"m023"}],"notes":"Two past Dr. Lin items (e001, m009) compete; next means on or after today. The reminder counts by the date it mentions (11/05), not the day it was sent."}
+{"id":"q052","kind":"temporal","question":"What is coming up next on my calendar?","now":"2026-10-15T18:00:00Z","expected_items":[{"source":"calendar","item_id":"e006"}],"notes":"Soonest upcoming event (tomorrow)."}
+{"id":"q053","kind":"temporal","question":"When was my last dentist cleaning?","now":"2026-10-15T18:00:00Z","expected_items":[{"source":"calendar","item_id":"e001"},{"source":"messages","item_id":"m009"}]}

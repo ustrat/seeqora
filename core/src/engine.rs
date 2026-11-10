@@ -16,9 +16,11 @@ use crate::generate::{
 #[cfg(not(target_os = "android"))]
 use crate::qwen::QwenGenerator;
 use crate::record::{Record, SourceKind};
-use crate::retrieve::hybrid_search;
-use crate::store::{Filters, Store, UpsertOutcome};
+use crate::retrieve::search_for;
+use crate::store::{Store, UpsertOutcome};
+use crate::when;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -145,6 +147,15 @@ pub struct Engine {
     /// Held for a whole answer; never held together with `store` (search
     /// finishes before generation starts), so search stays responsive.
     generator: Mutex<Option<Box<dyn Generator>>>,
+    /// The user's UTC offset, for "today", "yesterday" and "next" (W5).
+    utc_offset_minutes: AtomicI32,
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 impl Engine {
@@ -153,6 +164,7 @@ impl Engine {
             store: Mutex::new(store),
             embedder: Mutex::new(None),
             generator: Mutex::new(None),
+            utc_offset_minutes: AtomicI32::new(0),
         })
     }
 
@@ -289,13 +301,21 @@ impl Engine {
         Ok(self.store().retain_items(source, &item_ids)? as i64)
     }
 
+    /// The user's current UTC offset in minutes (local = UTC + offset). The
+    /// shell sets it at start and when the time zone changes; time words in
+    /// questions are read in local days.
+    pub fn set_utc_offset_minutes(&self, minutes: i32) {
+        self.utc_offset_minutes.store(minutes, Ordering::Relaxed);
+    }
+
     /// Search switched-on sources. Revoked sources have no rows left, so they
-    /// can never appear.
+    /// can never appear. Time words ("next", "last Thursday") reorder results.
     pub fn search(&self, query: String, top_n: u32) -> FfiResult<SearchResults> {
+        let off = self.utc_offset_minutes.load(Ordering::Relaxed);
         let embedder = self.embedder();
         let dense = embedder.as_deref().map(|e| e as &dyn Embedder);
         let s = self.store();
-        let r = hybrid_search(&s, dense, &query, &Filters::default(), top_n as usize)?;
+        let r = search_for(&s, dense, &query, now_ms(), off, top_n as usize)?;
         let mut hits = Vec::with_capacity(r.hits.len());
         for h in r.hits {
             if let Some(c) = s.get_chunk(&h.chunk_id)? {
@@ -356,6 +376,7 @@ impl Engine {
         listener: Box<dyn AnswerListener>,
     ) -> FfiResult<Answer> {
         let t0 = Instant::now();
+        self.set_utc_offset_minutes(utc_offset_minutes);
         let found = self.search(question.clone(), ANSWER_PASSAGES as u32)?;
         let mut stats = AnswerStats {
             retrieve_ms: t0.elapsed().as_millis() as u64,
@@ -386,20 +407,23 @@ impl Engine {
         };
         stats.model_id = generator.model_id().to_string();
 
+        let now = now_ms();
+        let today = when::local_day(now, utc_offset_minutes);
         let prompt_passages: Vec<PromptPassage> = found
             .hits
             .iter()
-            .map(|h| PromptPassage {
-                label: passage_label(h),
-                timestamp_ms: h.timestamp_ms,
-                text: h.text.clone(),
+            .map(|h| {
+                let days = when::event_days(h.source, h.timestamp_ms, &h.text, utc_offset_minutes);
+                PromptPassage {
+                    label: passage_label(h),
+                    timestamp_ms: h.timestamp_ms,
+                    text: h.text.clone(),
+                    about_day: days.iter().copied().find(|&d| d >= today).or(days.last().copied()),
+                    is_event: h.source == SourceKind::Calendar,
+                }
             })
             .collect();
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-        let (system, user) = build_prompt(&question, &prompt_passages, now_ms, utc_offset_minutes);
+        let (system, user) = build_prompt(&question, &prompt_passages, now, utc_offset_minutes);
         let mut on_text = |t: &str| listener.on_text(t.to_string());
         let (raw, g) = generator.generate(&system, &user, MAX_NEW_TOKENS, &mut on_text)?;
         drop(guard);

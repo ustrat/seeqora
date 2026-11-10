@@ -489,8 +489,12 @@ class AppState(private val context: Context, private val engine: Engine) {
         else "Using this phone's data. Switch sources on to index them."
     }
 
+    /** Search reads time words ("next", "last Thursday") in local days, so pass the current offset. */
     suspend fun search(query: String): SearchResults =
-        withContext(Dispatchers.IO) { engine.search(query, 20u) }
+        withContext(Dispatchers.IO) {
+            engine.setUtcOffsetMinutes(TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000)
+            engine.search(query, 20u)
+        }
 
     /** Tap-through to the original item in its own app (T2). False if nothing can open it. */
     fun openOriginal(hit: SearchHit): Boolean {
