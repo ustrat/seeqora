@@ -21,10 +21,12 @@ command -v cargo-ndk >/dev/null 2>&1 || cargo install cargo-ndk --locked
 # work. The app checks /proc/cpuinfo for both before loading the core.
 export GGML_CPU_ARM_ARCH="armv8.2-a+dotprod+i8mm"
 export ANDROID_NDK="$ANDROID_NDK_HOME"
-export ANDROID_PLATFORM="${ANDROID_PLATFORM:-android-29}"  # app minSdk
+export ANDROID_PLATFORM="android-29"  # app minSdk
 
+# --platform matches minSdk: cargo-ndk's compiler wrapper otherwise targets
+# API 21, where bionic lacks posix_madvise (llama.cpp needs it, API 23+).
 echo "==> Build core .so (arm64-v8a, x86_64)"
-cargo ndk -t arm64-v8a -t x86_64 -o android/app/src/main/jniLibs \
+cargo ndk --platform 29 -t arm64-v8a -t x86_64 -o android/app/src/main/jniLibs \
   build -p seeqora-core --release --lib
 
 echo "==> Generate Kotlin bindings"
