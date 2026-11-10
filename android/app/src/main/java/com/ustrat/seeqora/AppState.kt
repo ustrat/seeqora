@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -323,7 +324,11 @@ class AppState(private val context: Context, private val engine: Engine) {
                 var total = engine.embeddingBacklog()
                 var done = 0L
                 while (total > 0) {
-                    while (answering) delay(250) // the answer gets the CPU
+                    if (answering) {
+                        Log.i("Seeqora", "embedding paused while answering")
+                        while (answering) delay(250) // the answer gets the CPU
+                        Log.i("Seeqora", "embedding resumed")
+                    }
                     embedStatus = "Understanding meaning: $done / $total"
                     val n = engine.embedNext(EMBED_BATCH)
                     if (n == 0L) break

@@ -71,7 +71,14 @@ Rules:\n\
 - Use only facts stated in the sources. Never guess or add outside knowledge.\n\
 - After each fact, cite its source number in square brackets, like [2].\n\
 - Answer in one to three short sentences.\n\
-- If the sources do not answer the question, reply exactly: {NOT_FOUND}",
+- If the sources do not answer the question, reply exactly: {NOT_FOUND}\n\
+\n\
+Example of the format:\n\
+Sources:\n\
+[1] Text message from Sam (Tue 2025-03-04): Booked us a table at Lucia for 7:30 Friday.\n\
+[2] Calendar event \"Gym\" (Wed 2025-03-05): Gym, Wed 6 pm.\n\
+Question: where is dinner on Friday?\n\
+Answer: Dinner is at Lucia at 7:30 on Friday [1].",
         today = day_label(now_ms + offset_ms),
     );
     let mut user = String::from("Sources:\n");
@@ -134,6 +141,68 @@ pub fn check_citations(text: &str, passages: usize) -> (String, Vec<u32>) {
     }
     out.push_str(rest);
     (out.trim().to_string(), cited)
+}
+
+/// Words too common to show that an answer came from a passage.
+const STOP_WORDS: &[&str] = &[
+    "the", "an", "is", "are", "was", "were", "be", "been", "on", "at", "in", "of", "to", "and",
+    "or", "for", "your", "you", "my", "me", "it", "its", "this", "that", "with", "from", "by",
+    "has", "have", "had", "will", "next", "there", "their", "they", "he", "she", "his", "her",
+    "st", "nd", "rd", "th", "am", "pm", "not", "no", "yes", "as", "so", "do", "did",
+];
+
+/// Lowercase words and numbers, split where letters meet digits ("26th" ->
+/// "26", "3pm" -> "3"), without stop words.
+fn content_tokens(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut cur_digit = false;
+    let flush = |cur: &mut String, out: &mut Vec<String>| {
+        if !cur.is_empty() {
+            let digit = cur.chars().all(|c| c.is_ascii_digit());
+            if (digit || cur.chars().count() >= 2) && !STOP_WORDS.contains(&cur.as_str()) {
+                out.push(std::mem::take(cur));
+            }
+            cur.clear();
+        }
+    };
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            let d = c.is_ascii_digit();
+            if !cur.is_empty() && d != cur_digit {
+                flush(&mut cur, &mut out);
+            }
+            cur_digit = d;
+            cur.extend(c.to_lowercase());
+        } else {
+            flush(&mut cur, &mut out);
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
+/// When the model answered without a citation, find the one passage the
+/// answer clearly came from: at least half of the answer's content words and
+/// numbers, and at least two of them, appear in it. Returns its number (1-based).
+/// The shell labels such a citation as matched by Seeqora, not by the model.
+pub fn attribute(answer: &str, passages: &[&str]) -> Option<u32> {
+    let mut words = content_tokens(answer);
+    words.sort();
+    words.dedup();
+    if words.len() < 2 {
+        return None;
+    }
+    let mut best: Option<(usize, usize)> = None; // (shared, passage index)
+    for (i, p) in passages.iter().enumerate() {
+        let have: std::collections::HashSet<String> = content_tokens(p).into_iter().collect();
+        let shared = words.iter().filter(|w| have.contains(*w)).count();
+        if best.is_none_or(|(s, _)| shared > s) {
+            best = Some((shared, i));
+        }
+    }
+    let (shared, i) = best?;
+    (shared >= 2 && shared * 2 >= words.len()).then_some(i as u32 + 1)
 }
 
 /// Whether the model said the passages do not answer the question.
@@ -211,6 +280,26 @@ mod tests {
         assert!(user.contains("[1] Message from Dana (Thu 1970-01-01): wifi is Tamarack"));
         assert!(user.contains(&format!("[2] Note (Thu 1970-01-01): {}\n", "x".repeat(PASSAGE_CHARS))));
         assert!(user.ends_with("Question: what is the wifi?"));
+    }
+
+    #[test]
+    fn attribution_finds_the_clear_source_only() {
+        let ps = [
+            "When is your next break sir?",
+            "Reminder: your appointment with Dr. Lee is Thursday, February 26th at 3pm.",
+        ];
+        assert_eq!(
+            attribute("Camir's next appointment is on Thursday, February 26th at 3", &ps),
+            Some(2)
+        );
+        // One shared word is not enough; neither is a minority of the answer.
+        assert_eq!(attribute("It is blue.", &ps), None);
+        assert_eq!(attribute("The meeting is with Dr. Patel in Boston on Monday", &ps), None);
+    }
+
+    #[test]
+    fn tokens_split_numbers_from_letters() {
+        assert_eq!(content_tokens("Feb 26th at 3pm, Camir's"), vec!["feb", "26", "3", "camir"]);
     }
 
     #[test]

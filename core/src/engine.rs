@@ -10,8 +10,8 @@ use crate::bert::BertEmbedder;
 use crate::embed::Embedder;
 use crate::error::CoreError;
 use crate::generate::{
-    build_prompt, check_citations, says_not_found, Generator, PromptPassage, ANSWER_PASSAGES,
-    MAX_NEW_TOKENS, NOT_FOUND,
+    attribute, build_prompt, check_citations, says_not_found, Generator, PromptPassage,
+    ANSWER_PASSAGES, MAX_NEW_TOKENS, NOT_FOUND,
 };
 use crate::qwen::QwenGenerator;
 use crate::record::{Record, SourceKind};
@@ -73,6 +73,9 @@ pub struct Answer {
     pub found: bool,
     /// Passage numbers cited, in order of first use.
     pub cited: Vec<u32>,
+    /// The model gave no citation and Seeqora matched the source itself;
+    /// the shell must label it that way.
+    pub attributed: bool,
     pub passages: Vec<SearchHit>,
     pub degraded: Option<String>,
     pub stats: AnswerStats,
@@ -176,6 +179,8 @@ impl Engine {
     /// Open (or create) the index file at `path`.
     #[uniffi::constructor]
     pub fn open(path: String) -> FfiResult<Arc<Self>> {
+        // Before any model can start candle's worker pool.
+        configure_threads();
         Ok(Self::new(Store::open(path)?))
     }
 
@@ -354,6 +359,7 @@ impl Engine {
             text: NOT_FOUND.to_string(),
             found: false,
             cited: vec![],
+            attributed: false,
             passages,
             degraded: found.degraded.clone(),
             stats,
@@ -398,19 +404,76 @@ impl Engine {
         stats.decode_ms = g.decode_ms;
         stats.stopped = g.stopped;
 
-        let (text, cited) = check_citations(&raw, found.hits.len());
-        if cited.is_empty() || says_not_found(&text) {
+        let (mut text, mut cited) = check_citations(&raw, found.hits.len());
+        if says_not_found(&text) {
             return Ok(not_found(found.hits, stats));
+        }
+        // Small models often answer correctly but forget the [n]. Cite the
+        // passage the answer clearly came from, and say that Seeqora matched it.
+        let mut attributed = false;
+        if cited.is_empty() {
+            let texts: Vec<&str> = found.hits.iter().map(|h| h.text.as_str()).collect();
+            match attribute(&text, &texts) {
+                Some(n) => {
+                    text = format!("{} [{n}]", text.trim_end());
+                    cited = vec![n];
+                    attributed = true;
+                }
+                None => return Ok(not_found(found.hits, stats)),
+            }
         }
         Ok(Answer {
             text,
             found: true,
             cited,
+            attributed,
             passages: found.hits,
             degraded: found.degraded,
             stats,
         })
     }
+}
+
+/// Use only the fast cores for model math. candle's worker pool waits at a
+/// barrier after every matrix multiply, so one slow little core holds back
+/// all of them. Runs once, before any model loads; an explicit
+/// CANDLE_NUM_THREADS / RAYON_NUM_THREADS in the environment wins.
+fn configure_threads() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let n = performance_cores().unwrap_or_else(|| {
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+        });
+        for var in ["CANDLE_NUM_THREADS", "RAYON_NUM_THREADS"] {
+            if std::env::var_os(var).is_none() {
+                std::env::set_var(var, n.to_string());
+            }
+        }
+    });
+}
+
+/// Cores whose top clock is within 70% of the fastest (Linux/Android sysfs).
+fn performance_cores() -> Option<usize> {
+    let mut freqs = Vec::new();
+    for i in 0..256 {
+        let path = format!("/sys/devices/system/cpu/cpu{i}/cpufreq/cpuinfo_max_freq");
+        match std::fs::read_to_string(path) {
+            Ok(s) => freqs.push(s.trim().parse::<u64>().ok()?),
+            Err(_) => break,
+        }
+    }
+    let max = *freqs.iter().max()?;
+    let n = freqs.iter().filter(|&&f| f * 10 >= max * 7).count();
+    (n > 0).then_some(n)
+}
+
+/// How the core was built and how it runs, for the answer timing line.
+#[uniffi::export]
+pub fn engine_info() -> String {
+    configure_threads();
+    let threads = std::env::var("CANDLE_NUM_THREADS").unwrap_or_else(|_| "?".into());
+    let dotprod = if cfg!(target_feature = "dotprod") { "on" } else { "off" };
+    format!("{threads} threads, dotprod {dotprod}")
 }
 
 /// Who or what a passage came from, as the model sees it.
@@ -552,12 +615,25 @@ mod tests {
     }
 
     #[test]
-    fn uncited_or_refused_answers_are_not_found() {
-        let (e, _) = engine_with("The password is Tamarack.");
+    fn uncited_answer_is_matched_to_its_source_and_labelled() {
+        let (e, _) = engine_with("The cabin password is Tamarack.");
         let a = e
             .answer("cabin wifi password".into(), 0, Box::new(Collect(Default::default())))
             .unwrap();
-        assert!(!a.found, "an answer without a citation must not be shown as found");
+        assert!(a.found);
+        assert!(a.attributed, "a Seeqora-matched citation must be labelled as such");
+        assert_eq!(a.cited, vec![1]);
+        assert_eq!(a.text, "The cabin password is Tamarack. [1]");
+        assert!(!engine_info().is_empty());
+    }
+
+    #[test]
+    fn uncited_or_refused_answers_are_not_found() {
+        let (e, _) = engine_with("It is purple.");
+        let a = e
+            .answer("cabin wifi password".into(), 0, Box::new(Collect(Default::default())))
+            .unwrap();
+        assert!(!a.found, "an answer with no citation and no clear source must not be shown");
         assert_eq!(a.text, NOT_FOUND);
         assert_eq!(a.passages.len(), 1, "passages still shown as ranked results");
 
