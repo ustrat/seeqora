@@ -13,6 +13,8 @@ pub mod embed;
 pub mod engine;
 pub mod error;
 pub mod generate;
+#[cfg(target_os = "android")]
+pub mod llama;
 pub mod qwen;
 pub mod record;
 pub mod retrieve;
