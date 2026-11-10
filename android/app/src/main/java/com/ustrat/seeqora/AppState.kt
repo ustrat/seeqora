@@ -301,6 +301,29 @@ class AppState(private val context: Context, private val engine: Engine) {
             }
         }
 
+    /**
+     * Load and warm the answer model while the user is still typing, so the
+     * first question doesn't pay the cold start (~17 s on the S24 Ultra).
+     * Embedding pauses meanwhile; the idle unload still applies (T5).
+     */
+    fun prepareAnswers() {
+        if (!answersReady || engine.generatorLoaded() || answerLock.isLocked) return
+        background.launch {
+            answerLock.withLock {
+                if (engine.generatorLoaded()) return@withLock
+                unloadJob?.cancel()
+                answering = true
+                try {
+                    runCatching { engine.loadGenerator(llmFile.path, tokenizerPath()) }
+                        .onFailure { Log.w("Seeqora", "answer model preload failed: ${it.message}") }
+                } finally {
+                    answering = false
+                    scheduleUnload()
+                }
+            }
+        }
+    }
+
     private fun scheduleUnload() {
         unloadJob?.cancel()
         unloadJob = background.launch {
