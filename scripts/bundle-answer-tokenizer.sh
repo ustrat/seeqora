@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Put the Qwen2.5 tokenizer (Apache-2.0, shared by every Qwen2.5 size) into
-# <dest>. The answer model itself is imported by the user on the phone; only
-# its tokenizer ships in the app (docs/DECISION_LOG.md).
+# <dest>, for the candle answer generator (iOS for now). Android runs
+# llama.cpp, which reads the tokenizer from the GGUF, so its APK ships none
+# (docs/DECISION_LOG.md).
 #
-#   bash scripts/bundle-answer-tokenizer.sh android/app/src/main/assets/models/qwen2.5
+#   bash scripts/bundle-answer-tokenizer.sh <dest>/qwen2.5
 set -euo pipefail
 
 DEST="${1:?destination directory}"
